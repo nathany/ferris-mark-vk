@@ -702,6 +702,40 @@ Key Patterns Established:
 > Please go through all the code and add concise comments suitable for someone still learning Vulkan.
 > If you identify any areas where the code itself can be made more readable and concise, please let me know.
 
+**2. Builder Pattern Consistency:**
+Some areas could use more consistent builder patterns for better readability, particularly in swapchain creation where we mix direct assignment with builders.
+
+**3. Error Handling Simplification:**
+The `.map_err(|e| anyhow!("{}", e))` pattern could be simplified with custom error types or wrapper functions.
+
+**4. Magic Numbers:**
+A few remaining magic numbers could become named constants:
+- `4` (bytes per pixel) → `RGBA_BYTES_PER_PIXEL`
+- `60.0` (physics scaling) → `TARGET_FPS`
+
+**5. Resource Management:**
+The cleanup code in `destroy()` could potentially be reorganized for clearer resource lifetime management.
+
+**6. Swapchain Recreation:**
+The swapchain recreation logic is scattered and could be consolidated for better maintainability.
+
+> We are currently working on some light refactoring to make this code more readable and maintainable.
+> - The `.map_err(|e| anyhow!("{}", e))` pattern could be simplified with custom error types or wrapper functions.
+> - A few remaining magic numbers could become named constants:
+>   - `4` (bytes per pixel) → `RGBA_BYTES_PER_PIXEL`
+>   - `60.0` (physics scaling) → `TARGET_FPS`
+
+
+
+
+
+> Let's take a look at swapchain creation and recreation.
+- Some areas could use more consistent builder patterns for better readability, particularly in swapchain creation where we mix direct assignment with builders.
+- The swapchain recreation logic is scattered and could be consolidated for better maintainability.
+
+
+---
+
 ## Maybe Later
 
 **Memory usage profiling**: Understand actual memory consumption patterns

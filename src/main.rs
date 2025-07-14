@@ -17,6 +17,15 @@ use winit::event::{Event, WindowEvent};
 use winit::event_loop::EventLoop;
 use winit::window::{Window, WindowBuilder};
 
+// Error handling wrapper functions
+fn map_entry_error<E: std::fmt::Display>(error: E) -> anyhow::Error {
+    anyhow!("{}", error)
+}
+
+fn map_shader_error(error: shaderc::Error) -> anyhow::Error {
+    anyhow!("Shader compilation failed: {}", error)
+}
+
 // Vulkan extensions required for rendering to a window surface
 const DEVICE_EXTENSIONS: &[vk::ExtensionName] = &[vk::KHR_SWAPCHAIN_EXTENSION.name];
 // Number of frames we can work on simultaneously (prevents CPU waiting for GPU)
@@ -39,6 +48,16 @@ const BOUNCE_DAMPING: f32 = 0.90; // Energy loss when sprites hit the ground
 const SPRITE_WIDTH: f32 = 99.0; // Width of each Ferris sprite
 const SPRITE_HEIGHT: f32 = 70.0; // Height of each Ferris sprite
 
+// Image and timing constants
+const RGBA_BYTES_PER_PIXEL: u32 = 4; // 4 bytes per pixel for RGBA format
+const TARGET_FPS: f32 = 60.0; // Target frame rate for physics scaling
+
+// Sprite velocity constants
+const MAX_INITIAL_HORIZONTAL_VELOCITY: f32 = 10.0; // Maximum initial horizontal velocity
+const MIN_INITIAL_VERTICAL_VELOCITY: f32 = 5.0; // Minimum initial upward velocity
+const MAX_INITIAL_VERTICAL_VELOCITY: f32 = 10.0; // Maximum initial upward velocity
+const MAX_BOUNCE_BOOST: f32 = 9.0; // Maximum random upward boost on bounce
+
 // Represents a single sprite in our physics simulation
 #[derive(Clone, Debug)]
 struct Sprite {
@@ -57,8 +76,9 @@ fn generate_sprites(count: usize) -> Vec<Sprite> {
                 fastrand::f32() * (LOGICAL_HEIGHT - SPRITE_HEIGHT),
             ),
             vel: Vec2::new(
-                (fastrand::f32() - 0.5) * 10.0, // Random velocity between -5.0 and 5.0
-                fastrand::f32() * 5.0 + 5.0,    // Random upward velocity between 5.0 and 10.0
+                (fastrand::f32() - 0.5) * MAX_INITIAL_HORIZONTAL_VELOCITY, // Random horizontal velocity
+                fastrand::f32() * (MAX_INITIAL_VERTICAL_VELOCITY - MIN_INITIAL_VERTICAL_VELOCITY)
+                    + MIN_INITIAL_VERTICAL_VELOCITY, // Random upward velocity
             ),
         });
     }
@@ -280,7 +300,7 @@ impl App {
         unsafe {
             // Load Vulkan library and create entry point
             let loader = LibloadingLoader::new(LIBRARY)?;
-            let entry = Entry::new(loader).map_err(|b| anyhow!("{}", b))?;
+            let entry = Entry::new(loader).map_err(map_entry_error)?;
 
             // Create Vulkan instance and window surface
             let instance = create_instance(window, &entry, &mut data)?;
@@ -469,7 +489,7 @@ impl App {
     fn update_sprites(&mut self, dt: f32) {
         let sprite_size = Vec2::new(SPRITE_WIDTH, SPRITE_HEIGHT);
         let logical_bounds = Vec2::new(LOGICAL_WIDTH, LOGICAL_HEIGHT);
-        let scaled_dt = dt * 60.0; // Scale for consistent feel regardless of framerate
+        let scaled_dt = dt * TARGET_FPS; // Scale for consistent feel regardless of framerate
         let gravity = Vec2::new(0.0, GRAVITY * scaled_dt);
 
         for sprite in &mut self.data.sprites {
@@ -494,7 +514,7 @@ impl App {
 
                 // Sometimes add a random upward boost for variety
                 if fastrand::f32() < 0.5 {
-                    sprite.vel.y -= fastrand::f32() * 9.0;
+                    sprite.vel.y -= fastrand::f32() * MAX_BOUNCE_BOOST;
                 }
             }
 
@@ -988,7 +1008,7 @@ unsafe fn create_pipeline(_instance: &Instance, device: &Device, data: &mut AppD
             "main",
             None,
         )
-        .map_err(|e| anyhow!("Failed to compile vertex shader: {}", e))?;
+        .map_err(map_shader_error)?;
 
     let frag_compiled = compiler
         .compile_into_spirv(
@@ -998,7 +1018,7 @@ unsafe fn create_pipeline(_instance: &Instance, device: &Device, data: &mut AppD
             "main",
             None,
         )
-        .map_err(|e| anyhow!("Failed to compile fragment shader: {}", e))?;
+        .map_err(map_shader_error)?;
 
     let vert_shader_code = vert_compiled.as_binary_u8();
     let frag_shader_code = frag_compiled.as_binary_u8();
@@ -1343,7 +1363,7 @@ unsafe fn create_texture_image(
     // Load image from disk and convert to RGBA format
     let img = image::open("ferris.png")?.to_rgba8();
     let (width, height) = (img.width(), img.height());
-    let size = u64::from(width * height * 4); // 4 bytes per pixel (RGBA)
+    let size = u64::from(width * height * RGBA_BYTES_PER_PIXEL); // RGBA bytes per pixel
 
     // Create staging buffer to temporarily hold image data in CPU-accessible memory
     let staging_buffer_info = vk::BufferCreateInfo::builder()

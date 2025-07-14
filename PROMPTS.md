@@ -675,9 +675,20 @@ Code Cleanup Changes Made:
 
 > Well done. Proceed through each of the other 4 candidates you identified, but test the build after completing each function before continuing onto the next.
 
-~193 lines** total moved from unsafe to safe context
-
 > Feel free to remove the // SAFE: and // UNSAFE: comments that you added during this process.
+
+> Nice work. Are there any other functions that would benefit from a refactor of the unsafe blocks?
+> Go for it with log_gpu_info().
+> Please also add your SAFE/UNSAFE comments to App::create and create_instance. Then we can both think about those two a little more.
+
+> Please proceed. It may be worth considering whether some of the safe lines can be moved. For example, does AppData need to come after loader/entry for it to work, or could it come before the unsafe block entirely? It that sort of consolidation is possible, we could both have fewer unsafe lines without increasing the number of unsafe blocks (making it less readable).
+
+Total Impact Across All Refactoring:
+
+- **~260+ lines** moved from unsafe to safe context
+- **Significantly fewer unsafe blocks** through consolidation
+- **Improved readability** with clear safe/unsafe separation
+- **Better maintainability** - safe sections can be modified confidently
 
 ## Maybe Later
 

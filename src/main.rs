@@ -215,51 +215,49 @@ struct App {
 
 impl App {
     unsafe fn create(window: &Window, sprite_count: usize, vsync_enabled: bool) -> Result<Self> {
+        let mut data = AppData {
+            surface: vk::SurfaceKHR::null(),
+            physical_device: vk::PhysicalDevice::null(),
+            graphics_queue: vk::Queue::null(),
+            present_queue: vk::Queue::null(),
+            swapchain_format: vk::Format::UNDEFINED,
+            swapchain_extent: vk::Extent2D::default(),
+            swapchain: vk::SwapchainKHR::null(),
+            swapchain_images: Vec::new(),
+            swapchain_image_views: Vec::new(),
+            pipeline_layout: vk::PipelineLayout::null(),
+            pipeline: vk::Pipeline::null(),
+            sprite_command_buffer: vk::Buffer::null(),
+            sprite_command_buffer_memory: vk::DeviceMemory::null(),
+            sprite_command_buffer_mapped: std::ptr::null_mut(),
+            descriptor_set: vk::DescriptorSet::null(),
+            descriptor_pool: vk::DescriptorPool::null(),
+            texture_image: vk::Image::null(),
+            texture_image_memory: vk::DeviceMemory::null(),
+            texture_image_view: vk::ImageView::null(),
+            texture_sampler: vk::Sampler::null(),
+            descriptor_set_layout: vk::DescriptorSetLayout::null(),
+            command_pool: vk::CommandPool::null(),
+            command_buffers: Vec::new(),
+            image_available_semaphores: Vec::new(),
+            render_finished_semaphores: Vec::new(),
+            in_flight_fences: Vec::new(),
+            frame: 0,
+            sprite_count,
+            sprites: generate_sprites(sprite_count),
+            last_update: Instant::now(),
+            frame_count: 0,
+            last_metrics_time: Instant::now(),
+            accumulated_frame_time: 0.0,
+        };
+
         unsafe {
             let loader = LibloadingLoader::new(LIBRARY)?;
             let entry = Entry::new(loader).map_err(|b| anyhow!("{}", b))?;
-            let mut data = AppData {
-                surface: vk::SurfaceKHR::null(),
-                physical_device: vk::PhysicalDevice::null(),
-                graphics_queue: vk::Queue::null(),
-                present_queue: vk::Queue::null(),
-                swapchain_format: vk::Format::UNDEFINED,
-                swapchain_extent: vk::Extent2D::default(),
-                swapchain: vk::SwapchainKHR::null(),
-                swapchain_images: Vec::new(),
-                swapchain_image_views: Vec::new(),
-                pipeline_layout: vk::PipelineLayout::null(),
-                pipeline: vk::Pipeline::null(),
-                sprite_command_buffer: vk::Buffer::null(),
-                sprite_command_buffer_memory: vk::DeviceMemory::null(),
-                sprite_command_buffer_mapped: std::ptr::null_mut(),
-                descriptor_set: vk::DescriptorSet::null(),
-                descriptor_pool: vk::DescriptorPool::null(),
-                texture_image: vk::Image::null(),
-                texture_image_memory: vk::DeviceMemory::null(),
-                texture_image_view: vk::ImageView::null(),
-                texture_sampler: vk::Sampler::null(),
-                descriptor_set_layout: vk::DescriptorSetLayout::null(),
-                command_pool: vk::CommandPool::null(),
-                command_buffers: Vec::new(),
-                image_available_semaphores: Vec::new(),
-                render_finished_semaphores: Vec::new(),
-                in_flight_fences: Vec::new(),
-                frame: 0,
-                sprite_count,
-                sprites: generate_sprites(sprite_count),
-                last_update: Instant::now(),
-
-                // Initialize metrics
-                frame_count: 0,
-                last_metrics_time: Instant::now(),
-                accumulated_frame_time: 0.0,
-            };
             let instance = create_instance(window, &entry, &mut data)?;
             data.surface = vk_window::create_surface(&instance, window, window)?;
             pick_physical_device(&instance, &mut data)?;
 
-            // Log GPU information after physical device is selected
             log_gpu_info(&instance, &mut data);
             let device = create_logical_device(&instance, &mut data)?;
             create_swapchain(window, &instance, &device, &mut data, vsync_enabled)?;
@@ -273,6 +271,7 @@ impl App {
             create_descriptor_sets(&instance, &device, &mut data)?;
             create_command_buffers(&instance, &device, &mut data)?;
             create_sync_objects(&instance, &device, &mut data)?;
+
             Ok(Self {
                 entry,
                 instance,
@@ -551,46 +550,45 @@ impl App {
 }
 
 unsafe fn create_instance(window: &Window, entry: &Entry, _data: &mut AppData) -> Result<Instance> {
-    unsafe {
-        // Check loader version support
-        let loader_version = entry
+    let loader_version = unsafe {
+        entry
             .enumerate_instance_version()
-            .unwrap_or(vk::make_version(1, 0, 0));
-        log::info!(
-            "Vulkan loader version: {}.{}.{}",
-            vk::version_major(loader_version),
-            vk::version_minor(loader_version),
-            vk::version_patch(loader_version)
-        );
+            .unwrap_or(vk::make_version(1, 0, 0))
+    };
 
-        // Request Vulkan 1.4 if supported, otherwise fall back
-        let requested_version =
-            if vk::version_major(loader_version) >= 1 && vk::version_minor(loader_version) >= 4 {
-                vk::make_version(1, 4, 0)
-            } else {
-                loader_version
-            };
+    log::info!(
+        "Vulkan loader version: {}.{}.{}",
+        vk::version_major(loader_version),
+        vk::version_minor(loader_version),
+        vk::version_patch(loader_version)
+    );
 
-        let application_info = vk::ApplicationInfo::builder()
-            .application_name(b"Ferris Mark VK\0")
-            .application_version(vk::make_version(1, 0, 0))
-            .engine_name(b"No Engine\0")
-            .engine_version(vk::make_version(1, 0, 0))
-            .api_version(requested_version);
+    let requested_version =
+        if vk::version_major(loader_version) >= 1 && vk::version_minor(loader_version) >= 4 {
+            vk::make_version(1, 4, 0)
+        } else {
+            loader_version
+        };
 
-        let extensions = vk_window::get_required_instance_extensions(window)
-            .iter()
-            .map(|e| e.as_ptr())
-            .collect::<Vec<_>>();
+    let application_info = vk::ApplicationInfo::builder()
+        .application_name(b"Ferris Mark VK\0")
+        .application_version(vk::make_version(1, 0, 0))
+        .engine_name(b"No Engine\0")
+        .engine_version(vk::make_version(1, 0, 0))
+        .api_version(requested_version);
 
-        let info = vk::InstanceCreateInfo::builder()
-            .application_info(&application_info)
-            .enabled_extension_names(&extensions);
+    let extensions = vk_window::get_required_instance_extensions(window)
+        .iter()
+        .map(|e| e.as_ptr())
+        .collect::<Vec<_>>();
 
-        let instance = entry.create_instance(&info, None)?;
+    let info = vk::InstanceCreateInfo::builder()
+        .application_info(&application_info)
+        .enabled_extension_names(&extensions);
 
-        Ok(instance)
-    }
+    let instance = unsafe { entry.create_instance(&info, None)? };
+
+    Ok(instance)
 }
 
 unsafe fn pick_physical_device(instance: &Instance, data: &mut AppData) -> Result<()> {
@@ -1760,21 +1758,19 @@ fn create_sprite_transform(window_width: f32, window_height: f32) -> [[f32; 4]; 
 }
 
 unsafe fn log_gpu_info(instance: &Instance, data: &mut AppData) {
-    unsafe {
-        if data.physical_device != vk::PhysicalDevice::null() {
-            let properties = instance.get_physical_device_properties(data.physical_device);
-            let device_name =
-                std::ffi::CStr::from_ptr(properties.device_name.as_ptr()).to_string_lossy();
-            println!("GPU: {device_name}");
+    if data.physical_device != vk::PhysicalDevice::null() {
+        let properties = unsafe { instance.get_physical_device_properties(data.physical_device) };
+        let device_name =
+            unsafe { std::ffi::CStr::from_ptr(properties.device_name.as_ptr()).to_string_lossy() };
+        println!("GPU: {device_name}");
 
-            let api_version = properties.api_version;
-            println!(
-                "Vulkan API: {}.{}.{}",
-                vk::version_major(api_version),
-                vk::version_minor(api_version),
-                vk::version_patch(api_version)
-            );
-        }
+        let api_version = properties.api_version;
+        println!(
+            "Vulkan API: {}.{}.{}",
+            vk::version_major(api_version),
+            vk::version_minor(api_version),
+            vk::version_patch(api_version)
+        );
     }
 }
 

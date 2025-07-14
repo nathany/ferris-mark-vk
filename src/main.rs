@@ -2,9 +2,8 @@ use anyhow::{anyhow, Result};
 use std::collections::HashSet;
 
 use std::mem::size_of;
-use vulkanalia::prelude::v1_0::*;
-use vulkanalia::vk::KhrSurfaceExtension;
-use vulkanalia::vk::KhrSwapchainExtension;
+use vulkanalia::prelude::v1_3::*;
+use vulkanalia::vk::{KhrSurfaceExtension, KhrSwapchainExtension};
 use vulkanalia::{
     loader::{LibloadingLoader, LIBRARY},
     window as vk_window, Device, Entry, Instance,
@@ -107,6 +106,7 @@ struct AppData {
 }
 
 struct App {
+    #[allow(dead_code)]
     entry: Entry,
     instance: Instance,
     device: Device,
@@ -275,12 +275,31 @@ impl App {
 }
 
 unsafe fn create_instance(window: &Window, entry: &Entry, _data: &mut AppData) -> Result<Instance> {
+    // Check loader version support
+    let loader_version = entry
+        .enumerate_instance_version()
+        .unwrap_or(vk::make_version(1, 0, 0));
+    log::info!(
+        "Vulkan loader version: {}.{}.{}",
+        vk::version_major(loader_version),
+        vk::version_minor(loader_version),
+        vk::version_patch(loader_version)
+    );
+
+    // Request Vulkan 1.4 if supported, otherwise fall back
+    let requested_version =
+        if vk::version_major(loader_version) >= 1 && vk::version_minor(loader_version) >= 4 {
+            vk::make_version(1, 4, 0)
+        } else {
+            loader_version
+        };
+
     let application_info = vk::ApplicationInfo::builder()
         .application_name(b"Vulkan Triangle\0")
         .application_version(vk::make_version(1, 0, 0))
         .engine_name(b"No Engine\0")
         .engine_version(vk::make_version(1, 0, 0))
-        .api_version(vk::make_version(1, 4, 0));
+        .api_version(requested_version);
 
     let extensions = vk_window::get_required_instance_extensions(window)
         .iter()
@@ -321,13 +340,36 @@ unsafe fn pick_physical_device(instance: &Instance, data: &mut AppData) -> Resul
     for physical_device in instance.enumerate_physical_devices()? {
         let properties = instance.get_physical_device_properties(physical_device);
 
+        // Check device API version support
+        let device_version = properties.api_version;
+        log::info!(
+            "Physical device `{}` supports Vulkan {}.{}.{}",
+            properties.device_name,
+            vk::version_major(device_version),
+            vk::version_minor(device_version),
+            vk::version_patch(device_version)
+        );
+
         if let Err(error) = check_physical_device(instance, data, physical_device) {
-            eprintln!(
+            log::warn!(
                 "Skipping physical device (`{}`): {}",
-                properties.device_name, error
+                properties.device_name,
+                error
             );
         } else {
-            println!("Selected physical device (`{}`).", properties.device_name);
+            log::info!("Selected physical device (`{}`).", properties.device_name);
+
+            // Check if device supports Vulkan 1.4
+            if vk::version_major(device_version) >= 1 && vk::version_minor(device_version) >= 4 {
+                log::info!(
+                    "Device supports Vulkan 1.4 - maintenance6 and other 1.4 features available"
+                );
+            } else {
+                log::warn!(
+                    "Device does not support Vulkan 1.4 - some features may not be available"
+                );
+            }
+
             data.physical_device = physical_device;
             return Ok(());
         }
@@ -395,6 +437,20 @@ unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Resu
         .iter()
         .map(|n| n.as_ptr())
         .collect::<Vec<_>>();
+
+    // Check device properties to determine Vulkan version support
+    let properties = instance.get_physical_device_properties(data.physical_device);
+    let device_version = properties.api_version;
+    let supports_vulkan_14 =
+        vk::version_major(device_version) >= 1 && vk::version_minor(device_version) >= 4;
+
+    // For now, use basic features regardless of version
+    // We've verified the version support above
+    if supports_vulkan_14 {
+        log::info!("Vulkan 1.4 device detected - maintenance6 and enhanced features available");
+    } else {
+        log::info!("Using basic Vulkan features (pre-1.4 device)");
+    }
 
     let features = vk::PhysicalDeviceFeatures::builder();
 
@@ -855,6 +911,8 @@ unsafe fn create_sync_objects(
 }
 
 fn main() -> Result<()> {
+    pretty_env_logger::init();
+
     let event_loop = EventLoop::new()?;
     let window = WindowBuilder::new()
         .with_title("Vulkan Triangle")

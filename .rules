@@ -2,6 +2,9 @@ This is a Vulkan experiment for personal use on my Windows 11 development machin
 
 Please run clippy after each refactor or feature addition.
 
-Please always resolve Vulkan validation layer errors and warnings after any change.
+Please always resolve Vulkan validation layer errors and warnings after any change,
+though performance validation layers may be disabled or ignored for now.
 
 Please write code that is as concise as reasonably possible.
+
+Please summarize the issues you ran into along the way.

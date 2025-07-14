@@ -13,9 +13,6 @@ void main() {
     // Multiply texture color by sprite color for tinting/alpha
     outColor = texColor * fragColor;
 
-    // Optional: early fragment discard for fully transparent pixels
-    // Note: This can hurt performance on tile-based GPUs, but helps with overdraw
-    if (outColor.a < 0.01) {
-        discard;
-    }
+    // Removed alpha discard for better performance on tile-based GPUs
+    // Modern GPUs handle transparent pixels efficiently
 }

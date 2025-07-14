@@ -525,8 +525,22 @@ FPS: 82.9 | Frame time: 11.99ms | Sprites: 50000 | Sprites/sec: 4146880 | Resolu
 
 ---
 
->
+> You mentioned some sorting and culling improvements? How much impact could that have? Would it cull sprites that are fully occluded by other sprites, taking into account alpha transparency? Or is it more just a viewport thing (we don't currently have sprites outside of the viewport)?
 
+🤔 Your Specific Constraints:**
+- **Single texture** → No texture state sorting benefits
+- **Single shader** → No shader state sorting benefits
+- **Same-sized sprites** → No size-based batching benefits
+- **Viewport-constrained** → No frustum culling benefits
+
+✅ What Actually Helped:**
+- **Removing alpha discard**: Better tile-based GPU performance
+
+
+
+
+Validation Performance Warning: [ BestPractices-vkAllocateMemory-small-allocation ] | MessageID = 0xfd92477a
+vkAllocateMemory(): pAllocateInfo->allocationSize is 27720. This is a very small allocation (current threshold is 262144 bytes). You should make large allocations and sub-allocate from one large VkDeviceMemory.
 
 ## Maybe Later
 

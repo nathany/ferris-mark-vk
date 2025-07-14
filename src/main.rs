@@ -457,6 +457,12 @@ unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Resu
     let mut dynamic_rendering_features =
         vk::PhysicalDeviceDynamicRenderingFeatures::builder().dynamic_rendering(true);
 
+    let mut maintenance4_features =
+        vk::PhysicalDeviceMaintenance4Features::builder().maintenance4(true);
+
+    let mut maintenance5_features =
+        vk::PhysicalDeviceMaintenance5Features::builder().maintenance5(true);
+
     let features = vk::PhysicalDeviceFeatures::builder();
 
     let info = vk::DeviceCreateInfo::builder()
@@ -465,7 +471,9 @@ unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Resu
         .enabled_extension_names(&extensions)
         .enabled_features(&features)
         .push_next(&mut sync2_features)
-        .push_next(&mut dynamic_rendering_features);
+        .push_next(&mut dynamic_rendering_features)
+        .push_next(&mut maintenance4_features)
+        .push_next(&mut maintenance5_features);
 
     let device = instance.create_device(data.physical_device, &info, None)?;
 

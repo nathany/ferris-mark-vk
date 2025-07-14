@@ -328,6 +328,10 @@ struct AppData {
     frame_count: u32,            // Frames rendered this second
     last_metrics_time: Instant,  // When we last printed metrics
     accumulated_frame_time: f32, // Total frame time this second
+
+    // Benchmark support
+    total_frame_count: u32,   // Total frames rendered since start
+    frame_limit: Option<u32>, // Exit after this many frames (for benchmarking)
 }
 
 // Main application state - owns all Vulkan objects
@@ -341,7 +345,12 @@ struct App {
 
 impl App {
     // Creates and initializes the entire Vulkan application
-    unsafe fn create(window: &Window, sprite_count: usize, vsync_enabled: bool) -> Result<Self> {
+    unsafe fn create(
+        window: &Window,
+        sprite_count: usize,
+        vsync_enabled: bool,
+        frame_limit: Option<u32>,
+    ) -> Result<Self> {
         let mut data = AppData {
             surface: vk::SurfaceKHR::null(),
             physical_device: vk::PhysicalDevice::null(),
@@ -376,6 +385,8 @@ impl App {
             frame_count: 0,
             last_metrics_time: Instant::now(),
             accumulated_frame_time: 0.0,
+            total_frame_count: 0,
+            frame_limit,
         };
 
         unsafe {
@@ -423,7 +434,7 @@ impl App {
     }
 
     // Renders one frame - updates physics and draws all sprites
-    unsafe fn render(&mut self, window: &Window) -> Result<()> {
+    unsafe fn render(&mut self, window: &Window) -> Result<bool> {
         let frame_start = Instant::now();
 
         // Update physics simulation
@@ -458,7 +469,8 @@ impl App {
             let image_index = match result {
                 Ok((image_index, _)) => image_index as usize,
                 Err(vk::ErrorCode::OUT_OF_DATE_KHR) => {
-                    return self.handle_swapchain_recreation(window);
+                    self.handle_swapchain_recreation(window)?;
+                    return Ok(true);
                 }
                 Err(e) => return Err(anyhow!("{}", e)),
             };
@@ -529,20 +541,42 @@ impl App {
 
         let frame_end = Instant::now();
         let frame_time = frame_end.duration_since(frame_start).as_secs_f32();
-        self.update_metrics(frame_time);
+        // Update performance metrics and check if we should exit
+        let should_continue = self.update_metrics(frame_time);
 
-        Ok(())
+        Ok(should_continue)
     }
 
     // Tracks and displays performance metrics every second
-    fn update_metrics(&mut self, frame_time: f32) {
+    fn update_metrics(&mut self, frame_time: f32) -> bool {
         self.data.frame_count += 1;
+        self.data.total_frame_count += 1;
         self.data.accumulated_frame_time += frame_time;
 
         let now = Instant::now();
         let elapsed = now
             .duration_since(self.data.last_metrics_time)
             .as_secs_f32();
+
+        // Check if we should exit after frame limit
+        if let Some(limit) = self.data.frame_limit {
+            if self.data.total_frame_count >= limit {
+                // Print final benchmark summary before exiting
+                let final_fps = if elapsed > 0.0 {
+                    self.data.frame_count as f32 / elapsed
+                } else {
+                    0.0
+                };
+                let sprites_per_sec = final_fps * self.data.sprites.len() as f32;
+                println!(
+                    "BENCHMARK_RESULT: {} sprites, {:.1} FPS, {:.0} sprites/sec",
+                    self.data.sprites.len(),
+                    final_fps,
+                    sprites_per_sec
+                );
+                return false; // Signal to exit
+            }
+        }
 
         // Print performance stats every second
         if elapsed >= 1.0 {
@@ -566,6 +600,8 @@ impl App {
             self.data.accumulated_frame_time = 0.0;
             self.data.last_metrics_time = now;
         }
+
+        true // Continue running
     }
 
     // Updates physics simulation for all sprites
@@ -631,13 +667,13 @@ impl App {
     }
 
     // Handles swapchain recreation with consolidated logic
-    unsafe fn handle_swapchain_recreation(&mut self, window: &Window) -> Result<()> {
+    unsafe fn handle_swapchain_recreation(&mut self, window: &Window) -> Result<bool> {
         log::debug!("Recreating swapchain due to window changes or out-of-date swapchain");
         unsafe { self.recreate_swapchain(window) }
     }
 
     // Recreates swapchain when window is resized or other changes occur
-    unsafe fn recreate_swapchain(&mut self, window: &Window) -> Result<()> {
+    unsafe fn recreate_swapchain(&mut self, window: &Window) -> Result<bool> {
         unsafe {
             // Wait for all operations to complete before recreating
             self.device.device_wait_idle()?;
@@ -649,7 +685,7 @@ impl App {
             self.create_swapchain_and_views(window, true)?;
 
             log::debug!("Swapchain recreated successfully");
-            Ok(())
+            Ok(true)
         }
     }
 
@@ -2043,8 +2079,22 @@ fn main() -> Result<()> {
     // Initialize logging
     pretty_env_logger::init();
 
-    // Parse command line arguments for sprite count and vsync
+    // Parse command line arguments
     let args: Vec<String> = env::args().collect();
+
+    // Show help if requested
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        println!("=== Ferris Mark VK - Vulkan Sprite Benchmark ===");
+        println!("Usage: {} [SPRITE_COUNT] [OPTIONS]", args[0]);
+        println!("Arguments:");
+        println!("  SPRITE_COUNT    Number of sprites to render (default: 1)");
+        println!("Options:");
+        println!("  --vsync         Enable VSync");
+        println!("  --frames N      Run for N frames then exit");
+        println!("  --help, -h      Show this help message");
+        return Ok(());
+    }
+
     let sprite_count = if args.len() > 1 {
         args[1].parse::<usize>().unwrap_or(1)
     } else {
@@ -2052,6 +2102,13 @@ fn main() -> Result<()> {
     };
 
     let vsync_enabled = args.iter().any(|arg| arg == "--vsync");
+
+    // Parse frame limit for benchmark mode
+    let frame_limit = args
+        .iter()
+        .position(|arg| arg == "--frames")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse::<u32>().ok());
 
     // Print startup information
     println!("=== Ferris Mark VK - Vulkan Sprite Benchmark ===");
@@ -2063,6 +2120,9 @@ fn main() -> Result<()> {
         "VSync: {}",
         if vsync_enabled { "Enabled" } else { "Disabled" }
     );
+    if let Some(frames) = frame_limit {
+        println!("Frame limit: {frames} frames");
+    }
     println!("Validation layers: Controlled by vkconfig");
     println!("Performance metrics will be logged every second...\n");
 
@@ -2078,7 +2138,7 @@ fn main() -> Result<()> {
         .build(&event_loop)?;
 
     // Initialize Vulkan application
-    let mut app = unsafe { App::create(&window, sprite_count, vsync_enabled)? };
+    let mut app = unsafe { App::create(&window, sprite_count, vsync_enabled, frame_limit)? };
 
     // Run the main event loop
     event_loop.run(move |event, target| match event {
@@ -2096,8 +2156,21 @@ fn main() -> Result<()> {
             event: WindowEvent::RedrawRequested,
             ..
         } => unsafe {
-            // Render one frame
-            let _ = app.render(&window);
+            // Render one frame and check if we should continue
+            match app.render(&window) {
+                Ok(should_continue) => {
+                    if !should_continue {
+                        // Benchmark finished, clean up and exit
+                        app.destroy();
+                        target.exit();
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Render error: {e}");
+                    app.destroy();
+                    target.exit();
+                }
+            }
         },
         Event::AboutToWait => {
             // Request a new frame to be drawn

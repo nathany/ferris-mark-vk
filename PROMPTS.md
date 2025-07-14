@@ -752,6 +752,18 @@ Issue Fixed:** ✅ NVIDIA validation warning about clear color compression
 
 ---
 
+> We can run our benchmark with a set number of sprites and see the FPS and other metrics every second. But I'd like a benchmark script (for Git Bash on Windows for a maybe build.rs).
+
+> * Run for a set number of frames, and take the average, but excluding the first 100 frames to allow for it to "warmup". We don't > currently have a command line option to terminate after a set number of frames (e.g. 10000 frames)
+> * Then increase the number of sprites and run it all again. The script that I'm basing this idea on is here: > https://raw.githubusercontent.com/unitoftime/experiments/refs/heads/master/gophermark/batch/test.sh
+> * From that data we should be able to generate a nice report using the averages from each of the runs.
+
+1. **Simple command line**: `--frames N` to exit after N frames
+2. **Single output file**: All results appended to `benchmark_results.txt`
+3. **Clean result line**: `BENCHMARK_RESULT: X sprites, Y FPS, Z sprites/sec`
+4. **One-liner parsing**: grep + sed + sort + printf in the benchmark script itself
+
+---
 
 ## Maybe Later
 

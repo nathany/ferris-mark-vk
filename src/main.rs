@@ -21,11 +21,31 @@ const VALIDATION_LAYER: vk::ExtensionName =
 const DEVICE_EXTENSIONS: &[vk::ExtensionName] = &[vk::KHR_SWAPCHAIN_EXTENSION.name];
 const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
+// Logical resolution constants
+const LOGICAL_WIDTH: f32 = 640.0;
+const LOGICAL_HEIGHT: f32 = 360.0;
+
+// Sprite helper functions using glam types
+const fn sprite_quad(pos_x: f32, pos_y: f32, size_x: f32, size_y: f32) -> [Vertex; 4] {
+    [
+        Vertex::new([pos_x, pos_y], [0.0, 0.0]),
+        Vertex::new([pos_x + size_x, pos_y], [1.0, 0.0]),
+        Vertex::new([pos_x + size_x, pos_y + size_y], [1.0, 1.0]),
+        Vertex::new([pos_x, pos_y + size_y], [0.0, 1.0]),
+    ]
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct Vertex {
     pos: [f32; 2],
     tex_coord: [f32; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct PushConstants {
+    transform: [[f32; 4]; 4], // 4x4 transformation matrix
 }
 
 impl Vertex {
@@ -59,12 +79,8 @@ impl Vertex {
     }
 }
 
-const VERTICES: &[Vertex] = &[
-    Vertex::new([-0.5, -0.5], [0.0, 0.0]),
-    Vertex::new([0.5, -0.5], [1.0, 0.0]),
-    Vertex::new([0.5, 0.5], [1.0, 1.0]),
-    Vertex::new([-0.5, 0.5], [0.0, 1.0]),
-];
+// Sprite positioned at (100, 100) with size 200x200 in logical coordinates
+const VERTICES: &[Vertex] = &sprite_quad(100.0, 100.0, 200.0, 200.0);
 
 const INDICES: &[u16] = &[0, 1, 2, 2, 3, 0];
 
@@ -224,6 +240,10 @@ impl App {
     }
 
     unsafe fn render(&mut self, window: &Window) -> Result<()> {
+        let window_size = window.inner_size();
+        let transform =
+            create_sprite_transform(window_size.width as f32, window_size.height as f32);
+
         let in_flight_fence = self.data.in_flight_fences[self.data.frame];
 
         self.device
@@ -249,7 +269,13 @@ impl App {
         self.device
             .reset_command_buffer(command_buffer, vk::CommandBufferResetFlags::empty())?;
 
-        record_command_buffer(&self.device, &self.data, command_buffer, image_index)?;
+        record_command_buffer(
+            &self.device,
+            &self.data,
+            command_buffer,
+            image_index,
+            &transform,
+        )?;
 
         // Use frame-based acquire semaphore but image-based render finished semaphore
         let wait_semaphore_submit_info = vk::SemaphoreSubmitInfo::builder()
@@ -358,6 +384,7 @@ impl App {
             .destroy_descriptor_set_layout(self.data.descriptor_set_layout, None);
         self.device.destroy_device(None);
         self.instance.destroy_surface_khr(self.data.surface, None);
+
         self.instance.destroy_instance(None);
     }
 }
@@ -383,7 +410,7 @@ unsafe fn create_instance(window: &Window, entry: &Entry, _data: &mut AppData) -
         };
 
     let application_info = vk::ApplicationInfo::builder()
-        .application_name(b"Vulkan Textured Quad\0")
+        .application_name(b"Ferris Mark VK\0")
         .application_version(vk::make_version(1, 0, 0))
         .engine_name(b"No Engine\0")
         .engine_version(vk::make_version(1, 0, 0))
@@ -814,7 +841,15 @@ unsafe fn create_pipeline(_instance: &Instance, device: &Device, data: &mut AppD
     data.descriptor_set_layout = device.create_descriptor_set_layout(&layout_info, None)?;
 
     let set_layouts = &[data.descriptor_set_layout];
-    let layout_info = vk::PipelineLayoutCreateInfo::builder().set_layouts(set_layouts);
+    let push_constant_ranges = &[vk::PushConstantRange::builder()
+        .stage_flags(vk::ShaderStageFlags::VERTEX)
+        .offset(0)
+        .size(size_of::<PushConstants>() as u32)
+        .build()];
+
+    let layout_info = vk::PipelineLayoutCreateInfo::builder()
+        .set_layouts(set_layouts)
+        .push_constant_ranges(push_constant_ranges);
     data.pipeline_layout = device.create_pipeline_layout(&layout_info, None)?;
 
     let stages = &[vert_stage, frag_stage];
@@ -889,6 +924,7 @@ unsafe fn record_command_buffer(
     data: &AppData,
     command_buffer: vk::CommandBuffer,
     image_index: usize,
+    transform: &[[f32; 4]; 4],
 ) -> Result<()> {
     let info =
         vk::CommandBufferBeginInfo::builder().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
@@ -991,6 +1027,21 @@ unsafe fn record_command_buffer(
         data.pipeline_layout,
         0,
         std::slice::from_ref(&descriptor_write),
+    );
+
+    // Push transformation matrix
+    let push_constants = PushConstants {
+        transform: *transform,
+    };
+    device.cmd_push_constants(
+        command_buffer,
+        data.pipeline_layout,
+        vk::ShaderStageFlags::VERTEX,
+        0,
+        std::slice::from_raw_parts(
+            &push_constants as *const _ as *const u8,
+            size_of::<PushConstants>(),
+        ),
     );
 
     device.cmd_draw_indexed(command_buffer, INDICES.len() as u32, 1, 0, 0, 0);
@@ -1500,12 +1551,71 @@ unsafe fn create_sync_objects(
     Ok(())
 }
 
+fn calculate_scaling_and_offset(window_width: f32, window_height: f32) -> (f32, f32, f32) {
+    let window_aspect = window_width / window_height;
+    let logical_aspect = LOGICAL_WIDTH / LOGICAL_HEIGHT;
+
+    let (scale, viewport_width, viewport_height) = if window_aspect > logical_aspect {
+        // Window is wider than logical aspect ratio - pillarbox
+        let scale = window_height / LOGICAL_HEIGHT;
+        let viewport_width = LOGICAL_WIDTH * scale;
+        (scale, viewport_width, window_height)
+    } else {
+        // Window is taller than logical aspect ratio - letterbox
+        let scale = window_width / LOGICAL_WIDTH;
+        let viewport_height = LOGICAL_HEIGHT * scale;
+        (scale, window_width, viewport_height)
+    };
+
+    let offset_x = (window_width - viewport_width) * 0.5;
+    let offset_y = (window_height - viewport_height) * 0.5;
+
+    (scale, offset_x, offset_y)
+}
+
+fn create_sprite_transform(window_width: f32, window_height: f32) -> [[f32; 4]; 4] {
+    let (scale, offset_x, offset_y) = calculate_scaling_and_offset(window_width, window_height);
+
+    // Use glam for cleaner matrix math
+    let logical_size = glam::vec2(LOGICAL_WIDTH, LOGICAL_HEIGHT);
+    let window_size = glam::vec2(window_width, window_height);
+    let offset = glam::vec2(offset_x, offset_y);
+
+    // Calculate the actual viewport in normalized device coordinates
+    let viewport_min = (offset / window_size) * 2.0 - 1.0;
+    let viewport_max = ((offset + logical_size * scale) / window_size) * 2.0 - 1.0;
+
+    // Create orthographic projection matrix using glam
+    let left = 0.0;
+    let right = LOGICAL_WIDTH;
+    let bottom = LOGICAL_HEIGHT; // Flip Y coordinate so (0,0) is top-left
+    let top = 0.0;
+
+    // Map logical coordinates to the calculated viewport
+    let viewport_size = viewport_max - viewport_min;
+    let logical_size_2d = glam::vec2(right - left, bottom - top);
+
+    let transform = glam::Mat4::from_cols(
+        glam::vec4(viewport_size.x / logical_size_2d.x, 0.0, 0.0, 0.0),
+        glam::vec4(0.0, viewport_size.y / logical_size_2d.y, 0.0, 0.0),
+        glam::vec4(0.0, 0.0, 1.0, 0.0),
+        glam::vec4(
+            viewport_min.x + viewport_size.x * (-left / logical_size_2d.x),
+            viewport_min.y + viewport_size.y * (-top / logical_size_2d.y),
+            0.0,
+            1.0,
+        ),
+    );
+
+    transform.to_cols_array_2d()
+}
+
 fn main() -> Result<()> {
     pretty_env_logger::init();
 
     let event_loop = EventLoop::new()?;
     let window = WindowBuilder::new()
-        .with_title("Vulkan Textured Quad")
+        .with_title("Ferris Mark VK - Sprite System")
         .with_inner_size(winit::dpi::LogicalSize::new(800, 600))
         .build(&event_loop)?;
 

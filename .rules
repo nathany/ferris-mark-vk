@@ -8,3 +8,5 @@ Please always resolve Vulkan validation layer errors and warnings after any chan
 Please write code that is as concise as reasonably possible.
 
 Please summarize the issues you ran into along the way.
+
+Validation layers are enabled for debug builds and configured through vkconfig (Vulkan SDK).

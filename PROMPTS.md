@@ -119,9 +119,11 @@ Major Issues Encountered
 
 > Feel free to upgrade other crates as well, but perhaps not all at once.
 
-1. **Updated Cargo.toml dependencies:**
-   - `vulkanalia`: 0.21 → 0.28 (major upgrade to latest version)
-   - `winit`: 0.28 → 0.29 (upgraded for raw-window-handle 0.6 compatibility)
-   - `glam`: 0.24 → 0.25 (minor version bump)
+✅ **Successfully upgraded all compatible dependencies:**
+
+- **vulkanalia**: 0.21.0 → 0.28.0 (latest)
+- **winit**: 0.28.7 → 0.29.15 (compatible with vulkanalia's raw-window-handle)
+- **glam**: 0.24.0 → 0.30.4 (latest)
+- **shaderc**: 0.8.3 → 0.9.1 (latest)
 
 ---

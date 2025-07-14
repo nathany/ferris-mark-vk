@@ -6,8 +6,8 @@ edition = "2021"
 [dependencies]
 vulkanalia = { version = "0.28", features = ["window", "libloading"] }
 winit = "0.29"
-glam = "0.25"
-shaderc = "0.8"
+glam = "0.30"
+shaderc = "0.9"
 anyhow = "1.0"
 bytemuck = { version = "1.14", features = ["derive"] }
 log = "0.4"

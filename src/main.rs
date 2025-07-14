@@ -283,7 +283,6 @@ impl App {
     }
 
     unsafe fn render(&mut self, window: &Window) -> Result<()> {
-        // SAFE: Timing and physics calculations
         let frame_start = Instant::now();
         let now = Instant::now();
         let dt = now.duration_since(self.data.last_update).as_secs_f32();
@@ -291,18 +290,14 @@ impl App {
 
         self.update_sprites(dt);
 
-        // SAFE: Window size and transform calculations
         let window_size = window.inner_size();
         let view_proj =
             create_sprite_transform(window_size.width as f32, window_size.height as f32);
 
-        // SAFE: Frame data access
         let in_flight_fence = self.data.in_flight_fences[self.data.frame];
         let current_frame = self.data.frame;
 
         unsafe {
-            // UNSAFE: Vulkan synchronization and rendering
-
             self.device
                 .wait_for_fences(&[in_flight_fence], true, u64::MAX)?;
 
@@ -379,7 +374,6 @@ impl App {
             self.data.frame = (self.data.frame + 1) % MAX_FRAMES_IN_FLIGHT;
         }
 
-        // SAFE: Performance metrics calculation
         let frame_end = Instant::now();
         let frame_time = frame_end.duration_since(frame_start).as_secs_f32();
         self.update_metrics(frame_time);
@@ -600,14 +594,10 @@ unsafe fn create_instance(window: &Window, entry: &Entry, _data: &mut AppData) -
 }
 
 unsafe fn pick_physical_device(instance: &Instance, data: &mut AppData) -> Result<()> {
-    // UNSAFE: Get list of physical devices
     let physical_devices = unsafe { instance.enumerate_physical_devices()? };
 
     for physical_device in physical_devices {
-        // UNSAFE: Get device properties
         let properties = unsafe { instance.get_physical_device_properties(physical_device) };
-
-        // SAFE: Version checks and logging
         let device_version = properties.api_version;
         log::info!(
             "Physical device `{}` supports Vulkan {}.{}.{}",
@@ -625,8 +615,6 @@ unsafe fn pick_physical_device(instance: &Instance, data: &mut AppData) -> Resul
             );
         } else {
             log::info!("Selected physical device (`{}`).", properties.device_name);
-
-            // SAFE: Version comparison and logging
             if vk::version_major(device_version) >= 1 && vk::version_minor(device_version) >= 4 {
                 log::info!(
                     "Device supports Vulkan 1.4 - maintenance6 and other 1.4 features available"
@@ -682,10 +670,8 @@ unsafe fn check_physical_device_extensions(
 }
 
 unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Result<Device> {
-    // UNSAFE: Get queue family indices
     let indices = unsafe { QueueFamilyIndices::get(instance, data, data.physical_device)? };
 
-    // SAFE: HashSet operations and iterator processing
     let mut unique_indices = HashSet::new();
     unique_indices.insert(indices.graphics);
     unique_indices.insert(indices.present);
@@ -705,10 +691,8 @@ unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Resu
         .map(|n| n.as_ptr())
         .collect::<Vec<_>>();
 
-    // UNSAFE: Get device properties
     let properties = unsafe { instance.get_physical_device_properties(data.physical_device) };
 
-    // SAFE: Version checks and logging
     let device_version = properties.api_version;
     let supports_vulkan_14 =
         vk::version_major(device_version) >= 1 && vk::version_minor(device_version) >= 4;
@@ -719,7 +703,6 @@ unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Resu
         log::info!("Using basic Vulkan features (pre-1.4 device)");
     }
 
-    // SAFE: Feature builder patterns
     let mut sync2_features =
         vk::PhysicalDeviceSynchronization2Features::builder().synchronization2(true);
 
@@ -748,7 +731,6 @@ unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Resu
         .push_next(&mut buffer_device_address_features);
 
     unsafe {
-        // UNSAFE: Vulkan device creation and queue retrieval
         let device = instance.create_device(data.physical_device, &device_create_info, None)?;
 
         data.graphics_queue = device.get_device_queue(indices.graphics, 0);
@@ -902,12 +884,10 @@ unsafe fn create_swapchain_image_views(
 }
 
 unsafe fn create_pipeline(_instance: &Instance, device: &Device, data: &mut AppData) -> Result<()> {
-    // SAFE: Compiler creation and file I/O
     let compiler = shaderc::Compiler::new().unwrap();
     let vert_shader_source = std::fs::read_to_string("shaders/sprite.vert")?;
     let frag_shader_source = std::fs::read_to_string("shaders/sprite.frag")?;
 
-    // SAFE: Shader compilation
     let vert_compiled = compiler
         .compile_into_spirv(
             &vert_shader_source,
@@ -931,7 +911,6 @@ unsafe fn create_pipeline(_instance: &Instance, device: &Device, data: &mut AppD
     let vert_shader_code = vert_compiled.as_binary_u8();
     let frag_shader_code = frag_compiled.as_binary_u8();
 
-    // SAFE: Builder patterns for pipeline state
     let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder();
 
     let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo::builder()
@@ -1000,7 +979,6 @@ unsafe fn create_pipeline(_instance: &Instance, device: &Device, data: &mut AppD
         .build()];
 
     unsafe {
-        // UNSAFE: Vulkan API calls
         let vert_shader_module = create_shader_module(device, vert_shader_code)?;
         let frag_shader_module = create_shader_module(device, frag_shader_code)?;
 
@@ -1247,12 +1225,10 @@ unsafe fn create_texture_image(
     device: &Device,
     data: &mut AppData,
 ) -> Result<()> {
-    // SAFE: Image loading and size calculations
     let img = image::open("ferris.png")?.to_rgba8();
     let (width, height) = (img.width(), img.height());
     let size = u64::from(width * height * 4);
 
-    // SAFE: Builder patterns for buffer and image creation
     let staging_buffer_info = vk::BufferCreateInfo::builder()
         .size(size)
         .usage(vk::BufferUsageFlags::TRANSFER_SRC)
@@ -1275,7 +1251,6 @@ unsafe fn create_texture_image(
         .samples(vk::SampleCountFlags::_1);
 
     unsafe {
-        // UNSAFE: Vulkan API calls
         let staging_buffer = device.create_buffer(&staging_buffer_info, None)?;
 
         let requirements = device.get_buffer_memory_requirements(staging_buffer);

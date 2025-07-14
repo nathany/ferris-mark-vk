@@ -363,6 +363,8 @@ I've successfully resolved the Windows DPI scaling issue! Here's what was change
 - This happened because `LogicalSize` gets multiplied by the DPI scale factor
 - The actual rendered resolution was 1.5x larger than intended
 
+Debug build:
+
 ```
 FPS: 165.0 | Frame time: 6.00ms | Sprites: 1000 | Sprites/sec: 164991 | Resolution: 1920x1080
 FPS: 146.4 | Frame time: 6.76ms | Sprites: 1000 | Sprites/sec: 146408 | Resolution: 1920x1080
@@ -371,6 +373,50 @@ FPS: 165.0 | Frame time: 6.00ms | Sprites: 1000 | Sprites/sec: 165009 | Resoluti
 
 ---
 
+> Now we have our sprite rendering working, so it's time to optimize! I found an article about rendering many sprites in Vulkan. What do you think of it? Is it all applicable to a modern Vulkan 1.4 implementation or is there some improvements that could be made? Also, we're only rendering one sprite texture right now and no text, so we could keep things a little simpler. Validation layers for performance and best practices are also now enabled. Let's make a plan to make this run faster!
+
+Optimization Plan
+
+Here's a step-by-step plan to dramatically improve performance:
+
+### Phase 1: Eliminate Vertex Buffer Updates
+**Goal**: Remove the expensive vertex buffer mapping/updating
+
+1. **Switch to procedural quad generation** using the `gl_VertexIndex` technique
+2. **Create a sprite command buffer** with transform, UV, and color data
+3. **Use instanced rendering** with one draw call
+
+### Phase 2: Implement Sprite Commands
+**Goal**: GPU-driven sprite rendering
+
+1. **Create sprite command structure** (simplified from article since you only have one texture)
+2. **Upload sprite data as storage buffer** instead of vertex attributes
+3. **Use buffer device addresses** for modern Vulkan 1.4 approach
+
+### Phase 3: Add Performance Optimizations
+**Goal**: Squeeze out maximum performance
+
+1. **Implement frustum culling** on CPU side
+2. **Sort sprites** by depth/state for better cache usage
+3. **Add performance validation layer feedback**
+
+### Phase 4: Future Enhancements
+**Goal**: Prepare for more complex scenarios
+
+1. **Add bindless texture support** for when you need multiple textures
+2. **Implement batching system** for different primitive types
+3. **Consider mesh shaders** for more complex sprite effects
+
+> Please proceed with phase 1. I do some research on the subsequent phases before we tackle those.
+
+Issues Encountered & Solutions:
+
+1. **Buffer device address validation error** - Fixed by adding `VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT` flag
+2. **Invisible sprites** - Fixed the procedural vertex generation bit manipulation
+3. **Shader compilation** - Debugged with simpler test shaders first
+4. **bytemuck compatibility** - Used `[[f32; 4]; 4]` instead of `Mat4` for POD types
+
+---
 
 ## Maybe Later
 

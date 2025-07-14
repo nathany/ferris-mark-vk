@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use bytemuck::{Pod, Zeroable};
+use glam::{Mat4, Vec3};
 use std::collections::HashSet;
 use std::env;
 use std::mem::size_of;
@@ -85,18 +86,28 @@ fn generate_sprites(count: usize) -> Vec<Sprite> {
     sprites
 }
 
-// Generate vertices from sprite positions
-fn sprites_to_vertices(sprites: &[Sprite]) -> Vec<Vertex> {
-    let mut vertices = Vec::new();
-    let sprite_width = 99.0;
-    let sprite_height = 70.0;
+// Convert sprites to sprite commands for GPU rendering
+impl App {
+    fn sprites_to_commands(&self) -> Vec<SpriteCommand> {
+        let mut commands = Vec::new();
+        let sprite_width = 99.0;
+        let sprite_height = 70.0;
 
-    for sprite in sprites {
-        let quad = sprite_quad(sprite.pos_x, sprite.pos_y, sprite_width, sprite_height);
-        vertices.extend_from_slice(&quad);
+        for sprite in &self.data.sprites {
+            // Create transform matrix for sprite position and size
+            let transform = Mat4::from_translation(Vec3::new(sprite.pos_x, sprite.pos_y, 0.0))
+                * Mat4::from_scale(Vec3::new(sprite_width, sprite_height, 1.0));
+
+            commands.push(SpriteCommand {
+                transform: transform.to_cols_array_2d(),
+                color: [1.0, 1.0, 1.0, 1.0], // White tint (no modification)
+                uv_min: [0.0, 0.0],          // Top-left UV
+                uv_max: [1.0, 1.0],          // Bottom-right UV
+            });
+        }
+
+        commands
     }
-
-    vertices
 }
 
 #[repr(C)]
@@ -108,8 +119,18 @@ struct Vertex {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct SpriteCommand {
+    transform: [[f32; 4]; 4], // Mat4 as array for bytemuck compatibility
+    color: [f32; 4],
+    uv_min: [f32; 2],
+    uv_max: [f32; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct PushConstants {
-    transform: [[f32; 4]; 4], // 4x4 transformation matrix
+    view_proj: [[f32; 4]; 4], // Mat4 as array for bytemuck compatibility
+    sprite_buffer_address: u64,
 }
 
 impl Vertex {
@@ -221,10 +242,9 @@ struct AppData {
     swapchain_image_views: Vec<vk::ImageView>,
     pipeline_layout: vk::PipelineLayout,
     pipeline: vk::Pipeline,
-    vertex_buffer: vk::Buffer,
-    vertex_buffer_memory: vk::DeviceMemory,
-    index_buffer: vk::Buffer,
-    index_buffer_memory: vk::DeviceMemory,
+    sprite_command_buffer: vk::Buffer,
+    sprite_command_buffer_memory: vk::DeviceMemory,
+    sprite_command_buffer_address: u64,
     sprite_count: usize,
     sprites: Vec<Sprite>,
     last_update: Instant,
@@ -270,10 +290,9 @@ impl App {
             swapchain_image_views: Vec::new(),
             pipeline_layout: vk::PipelineLayout::null(),
             pipeline: vk::Pipeline::null(),
-            vertex_buffer: vk::Buffer::null(),
-            vertex_buffer_memory: vk::DeviceMemory::null(),
-            index_buffer: vk::Buffer::null(),
-            index_buffer_memory: vk::DeviceMemory::null(),
+            sprite_command_buffer: vk::Buffer::null(),
+            sprite_command_buffer_memory: vk::DeviceMemory::null(),
+            sprite_command_buffer_address: 0,
             texture_image: vk::Image::null(),
             texture_image_memory: vk::DeviceMemory::null(),
             texture_image_view: vk::ImageView::null(),
@@ -307,8 +326,7 @@ impl App {
         create_texture_image(&instance, &device, &mut data)?;
         create_texture_image_view(&instance, &device, &mut data)?;
         create_texture_sampler(&instance, &device, &mut data)?;
-        create_vertex_buffer(&instance, &device, &mut data, sprite_count)?;
-        create_index_buffer(&instance, &device, &mut data, sprite_count)?;
+        create_sprite_command_buffer(&instance, &device, &mut data, sprite_count)?;
         create_pipeline(&instance, &device, &mut data)?;
         create_command_buffers(&instance, &device, &mut data)?;
         create_sync_objects(&instance, &device, &mut data)?;
@@ -331,7 +349,7 @@ impl App {
         self.update_sprites(dt);
 
         let window_size = window.inner_size();
-        let transform =
+        let view_proj =
             create_sprite_transform(window_size.width as f32, window_size.height as f32);
 
         let in_flight_fence = self.data.in_flight_fences[self.data.frame];
@@ -361,10 +379,10 @@ impl App {
 
         record_command_buffer(
             &self.device,
-            &self.data,
             command_buffer,
             image_index,
-            &transform,
+            &self.data,
+            &view_proj,
         )?;
 
         // Use frame-based acquire semaphore but image-based render finished semaphore
@@ -498,23 +516,28 @@ impl App {
 
         // Update vertex buffer with new positions
         unsafe {
-            self.update_vertex_buffer().unwrap();
+            self.update_sprite_command_buffer().unwrap();
         }
     }
 
-    unsafe fn update_vertex_buffer(&mut self) -> Result<()> {
-        let vertices = sprites_to_vertices(&self.data.sprites);
-        let size = (vertices.len() * size_of::<Vertex>()) as u64;
+    unsafe fn update_sprite_command_buffer(&mut self) -> Result<()> {
+        let sprite_commands = self.sprites_to_commands();
+        let size = (sprite_commands.len() * size_of::<SpriteCommand>()) as u64;
 
-        // Map and update the vertex buffer
+        // Map and update the sprite command buffer
         let memory = self.device.map_memory(
-            self.data.vertex_buffer_memory,
+            self.data.sprite_command_buffer_memory,
             0,
             size,
             vk::MemoryMapFlags::empty(),
         )?;
-        std::ptr::copy_nonoverlapping(vertices.as_ptr(), memory.cast(), vertices.len());
-        self.device.unmap_memory(self.data.vertex_buffer_memory);
+        std::ptr::copy_nonoverlapping(
+            sprite_commands.as_ptr(),
+            memory.cast(),
+            sprite_commands.len(),
+        );
+        self.device
+            .unmap_memory(self.data.sprite_command_buffer_memory);
 
         Ok(())
     }
@@ -566,11 +589,11 @@ impl App {
             .free_memory(self.data.texture_image_memory, None);
 
         // Destroy buffer resources
-        self.device.destroy_buffer(self.data.index_buffer, None);
-        self.device.free_memory(self.data.index_buffer_memory, None);
-        self.device.destroy_buffer(self.data.vertex_buffer, None);
+        // Destroy buffers
         self.device
-            .free_memory(self.data.vertex_buffer_memory, None);
+            .destroy_buffer(self.data.sprite_command_buffer, None);
+        self.device
+            .free_memory(self.data.sprite_command_buffer_memory, None);
 
         self.device.destroy_pipeline(self.data.pipeline, None);
         self.device
@@ -774,6 +797,9 @@ unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Resu
     let mut maintenance5_features =
         vk::PhysicalDeviceMaintenance5Features::builder().maintenance5(true);
 
+    let mut buffer_device_address_features =
+        vk::PhysicalDeviceBufferDeviceAddressFeatures::builder().buffer_device_address(true);
+
     let features = vk::PhysicalDeviceFeatures::builder();
 
     let info = vk::DeviceCreateInfo::builder()
@@ -784,7 +810,8 @@ unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Resu
         .push_next(&mut sync2_features)
         .push_next(&mut dynamic_rendering_features)
         .push_next(&mut maintenance4_features)
-        .push_next(&mut maintenance5_features);
+        .push_next(&mut maintenance5_features)
+        .push_next(&mut buffer_device_address_features);
 
     let device = instance.create_device(data.physical_device, &info, None)?;
 
@@ -920,14 +947,14 @@ unsafe fn create_swapchain_image_views(
 unsafe fn create_pipeline(_instance: &Instance, device: &Device, data: &mut AppData) -> Result<()> {
     let compiler = shaderc::Compiler::new().unwrap();
 
-    let vert_shader_source = std::fs::read_to_string("shaders/sprite.vert")?;
-    let frag_shader_source = std::fs::read_to_string("shaders/sprite.frag")?;
+    let vert_shader_source = std::fs::read_to_string("shaders/sprite_opt.vert")?;
+    let frag_shader_source = std::fs::read_to_string("shaders/sprite_opt.frag")?;
 
     let vert_compiled = compiler
         .compile_into_spirv(
             &vert_shader_source,
             shaderc::ShaderKind::Vertex,
-            "sprite.vert",
+            "sprite_opt.vert",
             "main",
             None,
         )
@@ -937,7 +964,7 @@ unsafe fn create_pipeline(_instance: &Instance, device: &Device, data: &mut AppD
         .compile_into_spirv(
             &frag_shader_source,
             shaderc::ShaderKind::Fragment,
-            "sprite.frag",
+            "sprite_opt.frag",
             "main",
             None,
         )
@@ -959,11 +986,8 @@ unsafe fn create_pipeline(_instance: &Instance, device: &Device, data: &mut AppD
         .module(frag_shader_module)
         .name(b"main\0");
 
-    let binding_descriptions = &[Vertex::binding_description()];
-    let attribute_descriptions = &Vertex::attribute_descriptions();
-    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder()
-        .vertex_binding_descriptions(binding_descriptions)
-        .vertex_attribute_descriptions(attribute_descriptions);
+    // No vertex input needed - vertices are generated procedurally in shader
+    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder();
 
     let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo::builder()
         .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
@@ -1116,10 +1140,10 @@ unsafe fn create_command_buffers(
 
 unsafe fn record_command_buffer(
     device: &Device,
-    data: &AppData,
     command_buffer: vk::CommandBuffer,
     image_index: usize,
-    transform: &[[f32; 4]; 4],
+    data: &AppData,
+    view_proj: &[[f32; 4]; 4],
 ) -> Result<()> {
     let info =
         vk::CommandBufferBeginInfo::builder().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
@@ -1132,7 +1156,7 @@ unsafe fn record_command_buffer(
 
     let color_clear_value = vk::ClearValue {
         color: vk::ClearColorValue {
-            float32: [0.3, 0.5, 0.7, 1.0], // Blue background for logical area
+            float32: [0.0, 0.0, 0.0, 1.0], // Black background - better for GPU compression
         },
     };
 
@@ -1196,14 +1220,6 @@ unsafe fn record_command_buffer(
 
     device.cmd_set_scissor(command_buffer, 0, &[scissor]);
 
-    // Bind vertex buffer
-    let vertex_buffers = &[data.vertex_buffer];
-    let offsets = &[0_u64];
-    device.cmd_bind_vertex_buffers(command_buffer, 0, vertex_buffers, offsets);
-
-    // Bind index buffer
-    device.cmd_bind_index_buffer(command_buffer, data.index_buffer, 0, vk::IndexType::UINT16);
-
     // Push descriptor for texture
     let image_info = vk::DescriptorImageInfo::builder()
         .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
@@ -1224,9 +1240,10 @@ unsafe fn record_command_buffer(
         std::slice::from_ref(&descriptor_write),
     );
 
-    // Push transformation matrix
+    // Push constants with view-projection matrix and sprite buffer address
     let push_constants = PushConstants {
-        transform: *transform,
+        view_proj: *view_proj,
+        sprite_buffer_address: data.sprite_command_buffer_address,
     };
     device.cmd_push_constants(
         command_buffer,
@@ -1239,14 +1256,9 @@ unsafe fn record_command_buffer(
         ),
     );
 
-    device.cmd_draw_indexed(
-        command_buffer,
-        (QUAD_INDICES.len() * data.sprite_count) as u32,
-        1,
-        0,
-        0,
-        0,
-    );
+    // Instanced draw: 6 vertices per quad, data.sprite_count instances
+    device.cmd_draw(command_buffer, 6, data.sprite_count as u32, 0, 0);
+
     device.cmd_end_rendering(command_buffer);
 
     // Transition image from COLOR_ATTACHMENT_OPTIMAL to PRESENT_SRC_KHR
@@ -1427,94 +1439,32 @@ unsafe fn create_texture_sampler(
     Ok(())
 }
 
-unsafe fn create_vertex_buffer(
-    instance: &Instance,
-    device: &Device,
-    data: &mut AppData,
-    _sprite_count: usize,
-) -> Result<()> {
-    let vertices = sprites_to_vertices(&data.sprites);
-    let size = (vertices.len() * size_of::<Vertex>()) as u64;
-
-    let (staging_buffer, staging_buffer_memory) = create_buffer(
-        instance,
-        device,
-        data,
-        size,
-        vk::BufferUsageFlags::TRANSFER_SRC,
-        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-    )?;
-
-    let memory = device.map_memory(staging_buffer_memory, 0, size, vk::MemoryMapFlags::empty())?;
-    std::ptr::copy_nonoverlapping(vertices.as_ptr(), memory.cast(), vertices.len());
-    device.unmap_memory(staging_buffer_memory);
-
-    let (vertex_buffer, vertex_buffer_memory) = create_buffer(
-        instance,
-        device,
-        data,
-        size,
-        vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::VERTEX_BUFFER,
-        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-    )?;
-
-    data.vertex_buffer = vertex_buffer;
-    data.vertex_buffer_memory = vertex_buffer_memory;
-
-    copy_buffer(device, data, staging_buffer, vertex_buffer, size)?;
-
-    device.destroy_buffer(staging_buffer, None);
-    device.free_memory(staging_buffer_memory, None);
-
-    Ok(())
-}
-
-unsafe fn create_index_buffer(
+unsafe fn create_sprite_command_buffer(
     instance: &Instance,
     device: &Device,
     data: &mut AppData,
     sprite_count: usize,
 ) -> Result<()> {
-    // Generate indices for multiple sprites
-    let mut indices = Vec::new();
-    for i in 0..sprite_count {
-        let base_vertex = (i * 4) as u16;
-        for &index in QUAD_INDICES {
-            indices.push(base_vertex + index);
-        }
-    }
+    let size = (sprite_count * size_of::<SpriteCommand>()) as u64;
 
-    let size = (indices.len() * size_of::<u16>()) as u64;
-
-    let (staging_buffer, staging_buffer_memory) = create_buffer(
+    let (sprite_command_buffer, sprite_command_buffer_memory) = create_buffer(
         instance,
         device,
         data,
         size,
-        vk::BufferUsageFlags::TRANSFER_SRC,
+        vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
 
-    let memory = device.map_memory(staging_buffer_memory, 0, size, vk::MemoryMapFlags::empty())?;
-    std::ptr::copy_nonoverlapping(indices.as_ptr(), memory.cast(), indices.len());
-    device.unmap_memory(staging_buffer_memory);
+    data.sprite_command_buffer = sprite_command_buffer;
+    data.sprite_command_buffer_memory = sprite_command_buffer_memory;
 
-    let (index_buffer, index_buffer_memory) = create_buffer(
-        instance,
-        device,
-        data,
-        size,
-        vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::INDEX_BUFFER,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL,
-    )?;
+    // Get buffer device address
+    let buffer_device_address_info =
+        vk::BufferDeviceAddressInfo::builder().buffer(sprite_command_buffer);
 
-    data.index_buffer = index_buffer;
-    data.index_buffer_memory = index_buffer_memory;
-
-    copy_buffer(device, data, staging_buffer, index_buffer, size)?;
-
-    device.destroy_buffer(staging_buffer, None);
-    device.free_memory(staging_buffer_memory, None);
+    data.sprite_command_buffer_address =
+        device.get_buffer_device_address(&buffer_device_address_info);
 
     Ok(())
 }
@@ -1533,13 +1483,18 @@ unsafe fn create_buffer(
         .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
     let buffer = device.create_buffer(&buffer_info, None)?;
-
     let requirements = device.get_buffer_memory_requirements(buffer);
-    let memory_type = get_memory_type(instance, data, requirements, properties)?;
 
-    let alloc_info = vk::MemoryAllocateInfo::builder()
+    let mut alloc_info = vk::MemoryAllocateInfo::builder()
         .allocation_size(requirements.size)
-        .memory_type_index(memory_type);
+        .memory_type_index(get_memory_type(instance, data, requirements, properties)?);
+
+    // Add device address allocation flag if buffer uses shader device address
+    let mut alloc_flags_info = vk::MemoryAllocateFlagsInfo::builder();
+    if usage.contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS) {
+        alloc_flags_info = alloc_flags_info.flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
+        alloc_info = alloc_info.push_next(&mut alloc_flags_info);
+    }
 
     let buffer_memory = device.allocate_memory(&alloc_info, None)?;
     device.bind_buffer_memory(buffer, buffer_memory, 0)?;

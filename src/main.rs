@@ -1863,7 +1863,7 @@ fn main() -> Result<()> {
     let event_loop = EventLoop::new()?;
     let window = WindowBuilder::new()
         .with_title("Ferris Mark VK - Sprite System")
-        .with_inner_size(winit::dpi::LogicalSize::new(
+        .with_inner_size(winit::dpi::PhysicalSize::new(
             INITIAL_WINDOW_WIDTH,
             INITIAL_WINDOW_HEIGHT,
         ))

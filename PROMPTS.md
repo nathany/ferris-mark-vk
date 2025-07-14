@@ -138,12 +138,252 @@ Vulkan 1.4 should be available, which I'd like to require. To start, let's also 
 - Updated the API version to `vk::make_version(1, 4, 0)` in the instance creation
 - While vulkanalia 0.28 doesn't have a v1_4 prelude yet, the app now requests Vulkan 1.4 API version
 
-> * VK_KHR_dynamic_rendering
-> * VK_KHR_synchronization2
-> * VK_KHR_maintenance*
-
 ✅ **Fixed Validation Layer Errors**
 The major issue was with semaphore synchronization. I implemented a proper solution:
 - **Per-swapchain-image semaphores**: Created separate `image_available_semaphores` and `render_finished_semaphores` for each swapchain image (typically 3) instead of per frame in flight (2)
 - **Proper indexing**: Used frame-based indexing for acquire semaphores but image-based indexing for render finished semaphores
 - **Fixed cleanup**: Updated the destroy function to properly clean up all created semaphores
+
+---
+
+> This is a Vulkan 1.4 app using Vulkanalia. I think the next extension to adopt as part of our modernization effort is:
+> * VK_KHR_synchronization2
+
+Changes Made:
+
+1. **Added Extension**: Added `vk::KHR_SYNCHRONIZATION2_EXTENSION.name` to the device extensions list
+2. **Enabled Feature**: Added `VkPhysicalDeviceSynchronization2Features` with `synchronization2` set to `true`
+3. **Modernized Queue Submission**: Replaced `vk::SubmitInfo` with `vk::SubmitInfo2` using:
+   - `vk::SemaphoreSubmitInfo` for more granular semaphore control
+   - `vk::CommandBufferSubmitInfo` for command buffer submission
+   - `vk::PipelineStageFlags2` for enhanced pipeline stage specification
+   - `queue_submit2()` instead of `queue_submit()`
+
+### Key Benefits:
+
+- **Enhanced Synchronization**: More precise pipeline stage control with `VkPipelineStageFlags2`
+- **Cleaner API**: Separate submission info structures for semaphores and command buffers
+
+When a KHR extension becomes core:
+- **Vulkan 1.2 and below**: Need both extension + feature
+- **Vulkan 1.3+ (when targeting the core version)**: Only need the feature
+- **Vulkan 1.3+ (when targeting older versions)**: Still need extension + feature
+
+---
+
+> The next extension to adopt as part of our modernization effort is: VK_KHR_dynamic_rendering
+
+Major Changes:
+
+1. **Feature Enablement**: Added `VkPhysicalDeviceDynamicRenderingFeatures` with `dynamicRendering` enabled
+2. **Removed Legacy Components**:
+   - Eliminated `render_pass` field from `AppData`
+   - Eliminated `framebuffers` field from `AppData`
+   - Removed `create_render_pass()` function
+   - Removed `create_framebuffers()` function
+3. **Pipeline Modernization**: Updated pipeline creation to use `VkPipelineRenderingCreateInfo` instead of render pass
+4. **Command Buffer Modernization**: Replaced render pass commands with dynamic rendering:
+   - `cmd_begin_render_pass()` → `cmd_begin_rendering()`
+   - `cmd_end_render_pass()` → `cmd_end_rendering()`
+   - Added explicit `VkRenderingInfo` with `VkRenderingAttachmentInfo`
+5. **Synchronization Enhancement**: Added explicit image layout transitions using synchronization2:
+   - `UNDEFINED` → `COLOR_ATTACHMENT_OPTIMAL` before rendering
+   - `COLOR_ATTACHMENT_OPTIMAL` → `PRESENT_SRC_KHR` after rendering
+
+
+---
+
+> Do we need feature enablement for VK_KHR_maintenance6?
+
+Maintenance Extension Status in Vulkan 1.4:
+
+| Extension | Core Status | Feature Structure | Requires Enablement |
+|-----------|-------------|-------------------|-------------------|
+| **maintenance4** | Core in 1.3+ | `VkPhysicalDeviceMaintenance4Features` | **YES** |
+| **maintenance5** | Core in 1.4 | `VkPhysicalDeviceMaintenance5Features` | **YES** |
+| **maintenance6** | Core in 1.4 | **None** | **NO |
+
+✅ **maintenance4 Features** (now enabled):
+- Early pipeline layout destruction
+- `LocalSizeId` shader support
+- Consistent image alignment requirements
+- Relaxed push constant initialization
+- Interface matching improvements
+
+### ✅ **maintenance5 Features** (now enabled):
+- Enhanced command buffer functionality
+- Better vertex buffer binding
+- Improved multisample operations
+- Device loss detection improvements
+- Additional API robustness
+
+### ✅ **maintenance6 Features** (automatic):
+- Enhanced memory binding error reporting
+- Fragment shading rate improvements
+- New descriptor binding commands
+- Extended format support
+
+---
+
+> Let's proceed to replace the triangle with a textured quad using ./ferris.png loaded via the image crate. Use modern
+Vulkan 1.4 features such as push constants and push descriptors where appropriate.
+
+**Textured Quad Rendering**:
+  - Replaced hardcoded triangle vertices with a quad
+  - Added texture coordinates for UV mapping
+  - Renders ferris.png texture using the image crate
+  - Push Descriptors: Using core `cmd_push_descriptor_set()` instead of traditional descriptor sets
+
+---
+
+> The textured quad we have right now needs to become a Sprite. We want to set a logical resolution, such as 640x360 and have pixel-perfect scaling (clamp) to the window size. Use letterboxing/pillarboxing to maintain the aspect ratio. Add the glam crate so we can use the types it defines.
+
+The sprite system is now:
+
+- ✅ Using logical coordinates (640x360 resolution)
+- ✅ Pixel-perfect scaling with aspect ratio preservation
+- ✅ Letterboxing/pillarboxing for different window sizes
+- ✅ Native sprite dimensions (99x70) matching the actual PNG
+
+---
+
+> Lets fill in a background color in the logical area so that the letterbox/pillarbox is more obvious.
+> Lets define the window size we start with in constants as well.
+
+- `INITIAL_WINDOW_WIDTH`: 1920 pixels
+- `INITIAL_WINDOW_HEIGHT`: 1080 pixels
+- Easy to modify for different default window sizes
+- Blue background color (`[0.3, 0.5, 0.7, 1.0]`) for the entire screen
+
+---
+
+> I made some changes to the window size, logical size, and initial sprite position. Please leave those alone for now.
+> We need to enable a blend mode. The PNG has an alpha channel and should render with a transparent background, but it is currently rendering with a black background.
+
+🎯 **Issue Identified:**
+- The pipeline was configured with `blend_enable(false)`
+- Blend factors were set to `ONE` and `ZERO` (no blending)
+- This caused the PNG's alpha channel to be ignored, resulting in black backgrounds
+
+### 🔧 **Fix Applied:**
+- **Enabled Blending**: `blend_enable(true)`
+- **Source Factor**: `SRC_ALPHA` - uses the sprite's alpha channel
+- **Destination Factor**: `ONE_MINUS_SRC_ALPHA` - uses the inverse of sprite's alpha
+- **Blend Operation**: `ADD` - standard alpha blending formula
+
+---
+
+> Nice. Next we want to render a variable number of Sprites based on a command line argument, e.g. `cargo run 100`.
+
+🎯 **New Features:**
+
+1. **Command Line Argument Support**
+   - `cargo run` - renders 1 sprite (default)
+   - `cargo run 10` - renders 10 sprites
+   - `cargo run 100` - renders 100 sprites
+   - Invalid arguments default to 1 sprite
+
+2. **Dynamic Buffer Management**
+   - Vertex buffer size scales with sprite count
+   - Index buffer generates proper indices for multiple quads
+   - Each sprite uses 4 vertices and 6 indices
+
+---
+
+> Now for the fun part. We want the sprites to start at random positions and bounce around, while handling
+> collisions with the screen edges. This Go code is an example of the movement logic I'd like to implement:
+> https://raw.githubusercontent.com/sedyh/ebitengine-bunny-mark/refs/heads/master/bench/bunny.go
+
+🎮 **Physics Constants (easily tweakable):**
+
+- `GRAVITY` - Downward acceleration strength
+- `BOUNCE_DAMPING` - Energy loss on ground impact
+
+> I think they jump higher in the Go version. It's probably related to the size of our sprite and the resolution I chose, but I'd like to keep those the same. Should we making the damping less?
+
+🎯 **Physics Improvements:**
+
+1. **Reduced Damping**: 0.85 → 0.90 (less energy loss on bounce)
+2. **Lighter Gravity**: 0.95 → 0.5 (sprites stay airborne longer)
+3. **Higher Initial Velocities**:
+   - Horizontal: -2.5/2.5 → -5.0/5.0 (doubled)
+   - Vertical: 2.5/5.0 → 5.0/10.0 (doubled)
+4. **Random Upward Boost**: Added 50% chance for extra bounce energy (0-9 units)
+
+---
+
+> I like it! The next thing is some basic metrics. We don't have font rendering like the Go version, so logging to the console will have to suffice. https://raw.githubusercontent.com/sedyh/ebitengine-bunny-mark/refs/heads/master/bench/metrics.go
+> Also see this DX11 version that is similar to what we're building, but with different movement. https://raw.githubusercontent.com/nathany/ferris-mark-dx/refs/heads/master/src/main.rs
+
+🎯 **Metrics Features Implemented:**
+
+1. **Real-time Performance Tracking**
+   - **FPS (Frames Per Second)**: Actual rendering performance
+   - **Frame Time**: Average milliseconds per frame
+   - **Sprites/Second**: Key throughput metric for benchmarking
+   - **Sprite Count**: Current number of active sprites
+   - **Resolution**: Current window/swapchain resolution
+
+2. **System Information**
+   - **GPU Name**: Hardware identification
+   - **Vulkan API Version**: Graphics API version
+   - **Logical Resolution**: Game coordinate system
+   - **Physics Parameters**: Gravity and bounce damping values
+
+🔧 **Technical Implementation:**
+
+- **Frame Timing**: High-precision measurement using `Instant`
+- **Rolling Averages**: Accumulates frame times over 1-second intervals
+- **Non-intrusive**: Minimal performance overhead
+- **Automatic Logging**: Updates every second in console
+
+---
+
+> My window scaling in Windows 11 is set to 150% on a 4K monitor. That would explain why the initial window is larger than 1/4 of my 4K screen, and why the resolution logged is like this:
+
+> === Ferris Mark VK - Vulkan Sprite Benchmark ===
+> Rendering 1000 sprites
+> Logical resolution: 1920x1080
+> Initial window size: 1920x1080
+> Physics: gravity=0.5, bounce_damping=0.9
+> Performance metrics will be logged every second...
+>
+> GPU: AMD Radeon RX 9070 XT
+> Vulkan API: 1.4.308
+> FPS: 133.4 | Frame time: 5.66ms | Sprites: 1000 | Sprites/sec: 133377 | Resolution: 2880x1620
+
+> Could we make it so the initial window size is 1920x1080 like requested, even if Windows 11 scaling is enabled?
+
+DPI Scaling Fix Summary
+
+I've successfully resolved the Windows DPI scaling issue! Here's what was changed:
+
+### 🎯 **Problem Identified:**
+- Windows 11 with 150% scaling was causing the window to be created at 2880x1620 instead of 1920x1080
+- This happened because `LogicalSize` gets multiplied by the DPI scale factor
+- The actual rendered resolution was 1.5x larger than intended
+
+```
+FPS: 165.0 | Frame time: 6.00ms | Sprites: 1000 | Sprites/sec: 164991 | Resolution: 1920x1080
+FPS: 146.4 | Frame time: 6.76ms | Sprites: 1000 | Sprites/sec: 146408 | Resolution: 1920x1080
+FPS: 165.0 | Frame time: 6.00ms | Sprites: 1000 | Sprites/sec: 165009 | Resolution: 1920x1080
+```
+
+---
+
+
+## Maybe Later
+
+* VK_EXT_debug_utils in debug releases to give names to objects ?
+* VK_KHR_get_physical_device_properties2 ?
+* VK_KHR_unified_image_layouts ? (not yet available)
+* Recycling command buffers
+
+Other key extensions and Vulkan 1.4 features to consider:
+
+VK_EXT_descriptor_indexing (core in 1.2) - Enables bindless rendering patterns and more flexible descriptor management
+VK_KHR_buffer_device_address (core in 1.2) - Essential for modern GPU-driven techniques
+VK_EXT_mesh_shader - Modern geometry pipeline replacement for vertex/geometry shaders
+VK_KHR_ray_tracing_pipeline - If you're interested in ray tracing
+VK_EXT_multi_draw - Efficient multi-draw calls (could be good for sprites, but it's not core)
+VK_EXT_extended_dynamic_state series - More runtime flexibility

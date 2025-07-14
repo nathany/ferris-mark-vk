@@ -1,0 +1,15 @@
+[env]
+# Enable Vulkan validation layers in debug builds
+# Note: Only set VK_INSTANCE_LAYERS if you want to override the default behavior
+# The application will automatically enable validation in debug builds
+# VK_INSTANCE_LAYERS = { value = "VK_LAYER_KHRONOS_validation", condition = "cfg(debug_assertions)" }
+
+# Optional: Enable additional validation features in debug builds
+VK_LAYER_ENABLES = { value = "VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT,VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT", condition = "cfg(debug_assertions)" }
+
+# Optional: Set validation layer message severity
+VK_LAYER_MESSAGE_SEVERITY = { value = "ERROR,WARNING,INFO", condition = "cfg(debug_assertions)" }
+
+[build]
+# Optional: Use different optimization levels for debug builds
+# opt-level = 1  # Uncomment if you want some optimization in debug builds

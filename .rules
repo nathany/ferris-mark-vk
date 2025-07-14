@@ -1,0 +1,7 @@
+This is a Vulkan experiment for personal use on my Windows 11 development machine.
+
+Please run clippy after each refactor or feature addition.
+
+Please always resolve Vulkan validation layer errors and warnings after any change.
+
+Please write code that is as concise as reasonably possible.

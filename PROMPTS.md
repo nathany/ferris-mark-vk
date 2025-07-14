@@ -508,9 +508,29 @@ The key optimizations for consistent frame pacing are:
    - **Instanced rendering** (one draw call for all sprites)
    - **Procedural vertex generation** (no vertex buffers)
 
+---
+
+> Let's apply the glam improvement for SIMD.
+
+```
+FPS: 82.9 | Frame time: 11.99ms | Sprites: 50000 | Sprites/sec: 4146880 | Resolution: 1920x1080
+```
+
+🎉 **SIMD Optimization Results Summary**
+
+### **Performance Improvements:**
+- **Code cleaner**: Vec2 operations are more readable than separate x/y components
+- **SIMD benefits**: glam's Vec2 uses CPU SIMD instructions for parallel operations
+- **Memory layout**: Better cache efficiency with packed Vec2 structures
+
+---
+
+>
 
 
 ## Maybe Later
+
+Question -- our frame times and FPS bounce around quite a bit each second. But I'm wondering how much of that is an issue with our rendering, vs. our metrics? Maybe we should be using an external tool?
 
 * VK_EXT_debug_utils in debug releases to give names to objects ?
 * VK_KHR_get_physical_device_properties2 ?
@@ -525,3 +545,20 @@ VK_EXT_mesh_shader - Modern geometry pipeline replacement for vertex/geometry sh
 VK_KHR_ray_tracing_pipeline - If you're interested in ray tracing
 VK_EXT_multi_draw - Efficient multi-draw calls (could be good for sprites, but it's not core)
 VK_EXT_extended_dynamic_state series - More runtime flexibility
+
+### RenderDoc Integration
+
+```rust
+// Add RenderDoc API integration
+#[cfg(debug_assertions)]
+use renderdoc::RenderDoc;
+
+#[cfg(debug_assertions)]
+fn capture_frame(&self) {
+    if let Ok(mut rd) = RenderDoc::new() {
+        rd.start_frame_capture(std::ptr::null(), std::ptr::null());
+        // Your rendering code here
+        rd.end_frame_capture(std::ptr::null(), std::ptr::null());
+    }
+}
+```

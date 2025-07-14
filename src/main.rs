@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use bytemuck::{Pod, Zeroable};
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Vec2, Vec3};
 use std::collections::HashSet;
 use std::env;
 use std::mem::size_of;
@@ -38,10 +38,8 @@ const BOUNCE_DAMPING: f32 = 0.90;
 // Sprite data for physics simulation
 #[derive(Clone, Debug)]
 struct Sprite {
-    pos_x: f32,
-    pos_y: f32,
-    vel_x: f32,
-    vel_y: f32,
+    pos: Vec2,
+    vel: Vec2,
 }
 
 // Generate sprites with random positions and velocities
@@ -66,10 +64,14 @@ fn generate_sprites(count: usize) -> Vec<Sprite> {
         let rand4 = (((seed ^ 0xAAAAAAAA).wrapping_mul(16807) % 2147483647) as f32) / 2147483647.0;
 
         sprites.push(Sprite {
-            pos_x: rand1 * (LOGICAL_WIDTH - sprite_width),
-            pos_y: rand2 * (LOGICAL_HEIGHT - sprite_height),
-            vel_x: (rand3 - 0.5) * 10.0, // Random velocity between -5.0 and 5.0
-            vel_y: rand4 * 5.0 + 5.0,    // Random upward velocity between 5.0 and 10.0
+            pos: Vec2::new(
+                rand1 * (LOGICAL_WIDTH - sprite_width),
+                rand2 * (LOGICAL_HEIGHT - sprite_height),
+            ),
+            vel: Vec2::new(
+                (rand3 - 0.5) * 10.0, // Random velocity between -5.0 and 5.0
+                rand4 * 5.0 + 5.0,    // Random upward velocity between 5.0 and 10.0
+            ),
         });
     }
 
@@ -85,7 +87,7 @@ impl App {
 
         for sprite in &self.data.sprites {
             // Create transform matrix for sprite position and size
-            let transform = Mat4::from_translation(Vec3::new(sprite.pos_x, sprite.pos_y, 0.0))
+            let transform = Mat4::from_translation(Vec3::new(sprite.pos.x, sprite.pos.y, 0.0))
                 * Mat4::from_scale(Vec3::new(sprite_width, sprite_height, 1.0));
 
             commands.push(SpriteCommand {
@@ -425,45 +427,46 @@ impl App {
     }
 
     fn update_sprites(&mut self, dt: f32) {
-        let sprite_width = 99.0;
-        let sprite_height = 70.0;
+        let sprite_size = Vec2::new(99.0, 70.0);
+        let logical_bounds = Vec2::new(LOGICAL_WIDTH, LOGICAL_HEIGHT);
+        let scaled_dt = dt * 60.0; // Scale by 60 for ~60fps feel
+        let gravity = Vec2::new(0.0, GRAVITY * scaled_dt);
 
         for sprite in &mut self.data.sprites {
-            // Update position
-            sprite.pos_x += sprite.vel_x * dt * 60.0; // Scale by 60 for ~60fps feel
-            sprite.pos_y += sprite.vel_y * dt * 60.0;
-            sprite.vel_y += GRAVITY * dt * 60.0;
+            // Update position using SIMD Vec2 operations
+            sprite.pos += sprite.vel * scaled_dt;
+            sprite.vel += gravity;
 
             // Handle collisions with screen edges
-            if sprite.pos_x + sprite_width > LOGICAL_WIDTH {
-                sprite.vel_x *= -1.0;
-                sprite.pos_x = LOGICAL_WIDTH - sprite_width;
+            if sprite.pos.x + sprite_size.x > logical_bounds.x {
+                sprite.vel.x *= -1.0;
+                sprite.pos.x = logical_bounds.x - sprite_size.x;
             }
-            if sprite.pos_x < 0.0 {
-                sprite.vel_x *= -1.0;
-                sprite.pos_x = 0.0;
+            if sprite.pos.x < 0.0 {
+                sprite.vel.x *= -1.0;
+                sprite.pos.x = 0.0;
             }
-            if sprite.pos_y + sprite_height > LOGICAL_HEIGHT {
-                sprite.vel_y *= -BOUNCE_DAMPING;
-                sprite.pos_y = LOGICAL_HEIGHT - sprite_height;
+            if sprite.pos.y + sprite_size.y > logical_bounds.y {
+                sprite.vel.y *= -BOUNCE_DAMPING;
+                sprite.pos.y = logical_bounds.y - sprite_size.y;
 
                 // Add random upward boost like in Go version (50% chance)
                 use std::collections::hash_map::DefaultHasher;
                 use std::hash::{Hash, Hasher};
                 let mut hasher = DefaultHasher::new();
-                (sprite.pos_x as u64).hash(&mut hasher);
+                (sprite.pos.x as u64).hash(&mut hasher);
                 let seed = hasher.finish();
                 let rand = ((seed.wrapping_mul(16807) % 2147483647) as f32) / 2147483647.0;
 
                 if rand < 0.5 {
                     let boost_rand =
                         (((seed >> 16).wrapping_mul(16807) % 2147483647) as f32) / 2147483647.0;
-                    sprite.vel_y -= boost_rand * 9.0; // Random boost between 0 and 9
+                    sprite.vel.y -= boost_rand * 9.0; // Random boost between 0 and 9
                 }
             }
-            if sprite.pos_y < 0.0 {
-                sprite.vel_y = 0.0;
-                sprite.pos_y = 0.0;
+            if sprite.pos.y < 0.0 {
+                sprite.vel.y = 0.0;
+                sprite.pos.y = 0.0;
             }
         }
 

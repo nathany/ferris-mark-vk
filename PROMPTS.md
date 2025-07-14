@@ -638,7 +638,7 @@ FPS: 82.9 | Frame time: 11.99ms | Sprites: 50000 | Sprites/sec: 4146880 | Resolu
 
 > Please add constants for sprite_width and sprite_height.
 
-
+> Please use the fastrand crate instead of generating our own pseudo-random values.
 
 ---
 

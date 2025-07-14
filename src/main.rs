@@ -49,31 +49,17 @@ struct Sprite {
 
 // Generate sprites with random positions and velocities
 fn generate_sprites(count: usize) -> Vec<Sprite> {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
     let mut sprites = Vec::new();
 
-    // Simple PRNG based on sprite index
-    for i in 0..count {
-        let mut hasher = DefaultHasher::new();
-        (i as u64).hash(&mut hasher);
-        let seed = hasher.finish();
-
-        // Generate pseudo-random values
-        let rand1 = ((seed.wrapping_mul(16807) % 2147483647) as f32) / 2147483647.0;
-        let rand2 = (((seed >> 16).wrapping_mul(16807) % 2147483647) as f32) / 2147483647.0;
-        let rand3 = (((seed >> 32).wrapping_mul(16807) % 2147483647) as f32) / 2147483647.0;
-        let rand4 = (((seed ^ 0xAAAAAAAA).wrapping_mul(16807) % 2147483647) as f32) / 2147483647.0;
-
+    for _i in 0..count {
         sprites.push(Sprite {
             pos: Vec2::new(
-                rand1 * (LOGICAL_WIDTH - SPRITE_WIDTH),
-                rand2 * (LOGICAL_HEIGHT - SPRITE_HEIGHT),
+                fastrand::f32() * (LOGICAL_WIDTH - SPRITE_WIDTH),
+                fastrand::f32() * (LOGICAL_HEIGHT - SPRITE_HEIGHT),
             ),
             vel: Vec2::new(
-                (rand3 - 0.5) * 10.0, // Random velocity between -5.0 and 5.0
-                rand4 * 5.0 + 5.0,    // Random upward velocity between 5.0 and 10.0
+                (fastrand::f32() - 0.5) * 10.0, // Random velocity between -5.0 and 5.0
+                fastrand::f32() * 5.0 + 5.0,    // Random upward velocity between 5.0 and 10.0
             ),
         });
     }
@@ -460,17 +446,8 @@ impl App {
                 sprite.pos.y = logical_bounds.y - sprite_size.y;
 
                 // Add random upward boost like in Go version (50% chance)
-                use std::collections::hash_map::DefaultHasher;
-                use std::hash::{Hash, Hasher};
-                let mut hasher = DefaultHasher::new();
-                (sprite.pos.x as u64).hash(&mut hasher);
-                let seed = hasher.finish();
-                let rand = ((seed.wrapping_mul(16807) % 2147483647) as f32) / 2147483647.0;
-
-                if rand < 0.5 {
-                    let boost_rand =
-                        (((seed >> 16).wrapping_mul(16807) % 2147483647) as f32) / 2147483647.0;
-                    sprite.vel.y -= boost_rand * 9.0; // Random boost between 0 and 9
+                if fastrand::f32() < 0.5 {
+                    sprite.vel.y -= fastrand::f32() * 9.0; // Random boost between 0 and 9
                 }
             }
             if sprite.pos.y < 0.0 {

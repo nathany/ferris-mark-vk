@@ -13,6 +13,7 @@ bytemuck = { version = "1.14", features = ["derive"] }
 log = "0.4"
 pretty_env_logger = "0.5"
 image = "0.25"
+fastrand = "2.0"
 
 [profile.dev]
 # Debug builds: Enable validation layers and debug info

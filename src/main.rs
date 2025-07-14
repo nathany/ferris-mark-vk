@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use bytemuck::{Pod, Zeroable};
 use std::collections::HashSet;
-
+use std::env;
 use std::mem::size_of;
 use vulkanalia::prelude::v1_3::*;
 use vulkanalia::vk::{DeviceV1_4, KhrSurfaceExtension, KhrSwapchainExtension};
@@ -37,6 +37,26 @@ const fn sprite_quad(pos_x: f32, pos_y: f32, size_x: f32, size_y: f32) -> [Verte
         Vertex::new([pos_x + size_x, pos_y + size_y], [1.0, 1.0]),
         Vertex::new([pos_x, pos_y + size_y], [0.0, 1.0]),
     ]
+}
+
+// Generate multiple sprites for testing
+fn generate_sprites(count: usize) -> Vec<Vertex> {
+    let mut vertices = Vec::new();
+    let sprite_width = 99.0;
+    let sprite_height = 70.0;
+    let cols = ((LOGICAL_WIDTH / sprite_width) as usize).max(1);
+
+    for i in 0..count {
+        let col = i % cols;
+        let row = i / cols;
+        let x = col as f32 * (sprite_width + 10.0);
+        let y = row as f32 * (sprite_height + 10.0);
+
+        let quad = sprite_quad(x, y, sprite_width, sprite_height);
+        vertices.extend_from_slice(&quad);
+    }
+
+    vertices
 }
 
 #[repr(C)]
@@ -83,10 +103,8 @@ impl Vertex {
     }
 }
 
-// Sprite positioned at (0, 0) with size 99x70 in logical coordinates (matches PNG dimensions)
-const VERTICES: &[Vertex] = &sprite_quad(0.0, 0.0, 99.0, 70.0);
-
-const INDICES: &[u16] = &[0, 1, 2, 2, 3, 0];
+// Indices for a single quad (will be reused for multiple sprites)
+const QUAD_INDICES: &[u16] = &[0, 1, 2, 2, 3, 0];
 
 #[derive(Clone, Debug)]
 struct QueueFamilyIndices {
@@ -167,6 +185,7 @@ struct AppData {
     vertex_buffer_memory: vk::DeviceMemory,
     index_buffer: vk::Buffer,
     index_buffer_memory: vk::DeviceMemory,
+    sprite_count: usize,
     texture_image: vk::Image,
     texture_image_memory: vk::DeviceMemory,
     texture_image_view: vk::ImageView,
@@ -189,7 +208,7 @@ struct App {
 }
 
 impl App {
-    unsafe fn create(window: &Window) -> Result<Self> {
+    unsafe fn create(window: &Window, sprite_count: usize) -> Result<Self> {
         let loader = LibloadingLoader::new(LIBRARY)?;
         let entry = Entry::new(loader).map_err(|b| anyhow!("{}", b))?;
         let mut data = AppData {
@@ -219,6 +238,7 @@ impl App {
             render_finished_semaphores: Vec::new(),
             in_flight_fences: Vec::new(),
             frame: 0,
+            sprite_count,
         };
         let instance = create_instance(window, &entry, &mut data)?;
         data.surface = vk_window::create_surface(&instance, window, window)?;
@@ -230,8 +250,8 @@ impl App {
         create_texture_image(&instance, &device, &mut data)?;
         create_texture_image_view(&instance, &device, &mut data)?;
         create_texture_sampler(&instance, &device, &mut data)?;
-        create_vertex_buffer(&instance, &device, &mut data)?;
-        create_index_buffer(&instance, &device, &mut data)?;
+        create_vertex_buffer(&instance, &device, &mut data, sprite_count)?;
+        create_index_buffer(&instance, &device, &mut data, sprite_count)?;
         create_pipeline(&instance, &device, &mut data)?;
         create_command_buffers(&instance, &device, &mut data)?;
         create_sync_objects(&instance, &device, &mut data)?;
@@ -1048,7 +1068,14 @@ unsafe fn record_command_buffer(
         ),
     );
 
-    device.cmd_draw_indexed(command_buffer, INDICES.len() as u32, 1, 0, 0, 0);
+    device.cmd_draw_indexed(
+        command_buffer,
+        (QUAD_INDICES.len() * data.sprite_count) as u32,
+        1,
+        0,
+        0,
+        0,
+    );
     device.cmd_end_rendering(command_buffer);
 
     // Transition image from COLOR_ATTACHMENT_OPTIMAL to PRESENT_SRC_KHR
@@ -1233,8 +1260,10 @@ unsafe fn create_vertex_buffer(
     instance: &Instance,
     device: &Device,
     data: &mut AppData,
+    sprite_count: usize,
 ) -> Result<()> {
-    let size = std::mem::size_of_val(VERTICES) as u64;
+    let vertices = generate_sprites(sprite_count);
+    let size = (vertices.len() * size_of::<Vertex>()) as u64;
 
     let (staging_buffer, staging_buffer_memory) = create_buffer(
         instance,
@@ -1246,7 +1275,7 @@ unsafe fn create_vertex_buffer(
     )?;
 
     let memory = device.map_memory(staging_buffer_memory, 0, size, vk::MemoryMapFlags::empty())?;
-    std::ptr::copy_nonoverlapping(VERTICES.as_ptr(), memory.cast(), VERTICES.len());
+    std::ptr::copy_nonoverlapping(vertices.as_ptr(), memory.cast(), vertices.len());
     device.unmap_memory(staging_buffer_memory);
 
     let (vertex_buffer, vertex_buffer_memory) = create_buffer(
@@ -1273,8 +1302,18 @@ unsafe fn create_index_buffer(
     instance: &Instance,
     device: &Device,
     data: &mut AppData,
+    sprite_count: usize,
 ) -> Result<()> {
-    let size = std::mem::size_of_val(INDICES) as u64;
+    // Generate indices for multiple sprites
+    let mut indices = Vec::new();
+    for i in 0..sprite_count {
+        let base_vertex = (i * 4) as u16;
+        for &index in QUAD_INDICES {
+            indices.push(base_vertex + index);
+        }
+    }
+
+    let size = (indices.len() * size_of::<u16>()) as u64;
 
     let (staging_buffer, staging_buffer_memory) = create_buffer(
         instance,
@@ -1286,7 +1325,7 @@ unsafe fn create_index_buffer(
     )?;
 
     let memory = device.map_memory(staging_buffer_memory, 0, size, vk::MemoryMapFlags::empty())?;
-    std::ptr::copy_nonoverlapping(INDICES.as_ptr(), memory.cast(), INDICES.len());
+    std::ptr::copy_nonoverlapping(indices.as_ptr(), memory.cast(), indices.len());
     device.unmap_memory(staging_buffer_memory);
 
     let (index_buffer, index_buffer_memory) = create_buffer(
@@ -1617,6 +1656,16 @@ fn create_sprite_transform(window_width: f32, window_height: f32) -> [[f32; 4]; 
 fn main() -> Result<()> {
     pretty_env_logger::init();
 
+    // Parse command line arguments for sprite count
+    let args: Vec<String> = env::args().collect();
+    let sprite_count = if args.len() > 1 {
+        args[1].parse::<usize>().unwrap_or(1)
+    } else {
+        1
+    };
+
+    println!("Rendering {sprite_count} sprites");
+
     let event_loop = EventLoop::new()?;
     let window = WindowBuilder::new()
         .with_title("Ferris Mark VK - Sprite System")
@@ -1626,7 +1675,7 @@ fn main() -> Result<()> {
         ))
         .build(&event_loop)?;
 
-    let mut app = unsafe { App::create(&window)? };
+    let mut app = unsafe { App::create(&window, sprite_count)? };
 
     event_loop.run(move |event, target| match event {
         Event::WindowEvent {

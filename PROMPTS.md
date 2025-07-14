@@ -673,7 +673,11 @@ Code Cleanup Changes Made:
 
 > Let's proceed with phase 1. Keep readability in mind. It may be better to have a few lines in an unsafe block that don't need to be if the code is more concise. But any large blocks of safe code should be outside of unsafe blocks if possible. Given the magnitude of these changes, it may be a good idea to tackle 1 function first and ensure everything compiles and works before moving on.
 
+> Well done. Proceed through each of the other 4 candidates you identified, but test the build after completing each function before continuing onto the next.
 
+~193 lines** total moved from unsafe to safe context
+
+> Feel free to remove the // SAFE: and // UNSAFE: comments that you added during this process.
 
 ## Maybe Later
 

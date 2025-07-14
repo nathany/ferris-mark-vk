@@ -283,21 +283,25 @@ impl App {
     }
 
     unsafe fn render(&mut self, window: &Window) -> Result<()> {
+        // SAFE: Timing and physics calculations
+        let frame_start = Instant::now();
+        let now = Instant::now();
+        let dt = now.duration_since(self.data.last_update).as_secs_f32();
+        self.data.last_update = now;
+
+        self.update_sprites(dt);
+
+        // SAFE: Window size and transform calculations
+        let window_size = window.inner_size();
+        let view_proj =
+            create_sprite_transform(window_size.width as f32, window_size.height as f32);
+
+        // SAFE: Frame data access
+        let in_flight_fence = self.data.in_flight_fences[self.data.frame];
+        let current_frame = self.data.frame;
+
         unsafe {
-            let frame_start = Instant::now();
-
-            // Update sprite physics
-            let now = Instant::now();
-            let dt = now.duration_since(self.data.last_update).as_secs_f32();
-            self.data.last_update = now;
-
-            self.update_sprites(dt);
-
-            let window_size = window.inner_size();
-            let view_proj =
-                create_sprite_transform(window_size.width as f32, window_size.height as f32);
-
-            let in_flight_fence = self.data.in_flight_fences[self.data.frame];
+            // UNSAFE: Vulkan synchronization and rendering
 
             self.device
                 .wait_for_fences(&[in_flight_fence], true, u64::MAX)?;
@@ -306,7 +310,7 @@ impl App {
                 self.data.swapchain,
                 u64::MAX,
                 self.data.image_available_semaphores
-                    [self.data.frame % self.data.image_available_semaphores.len()],
+                    [current_frame % self.data.image_available_semaphores.len()],
                 vk::Fence::null(),
             );
 
@@ -318,7 +322,7 @@ impl App {
 
             self.device.reset_fences(&[in_flight_fence])?;
 
-            let command_buffer = self.data.command_buffers[self.data.frame];
+            let command_buffer = self.data.command_buffers[current_frame];
             self.device
                 .reset_command_buffer(command_buffer, vk::CommandBufferResetFlags::empty())?;
 
@@ -334,7 +338,7 @@ impl App {
             let wait_semaphore_submit_info = vk::SemaphoreSubmitInfo::builder()
                 .semaphore(
                     self.data.image_available_semaphores
-                        [self.data.frame % self.data.image_available_semaphores.len()],
+                        [current_frame % self.data.image_available_semaphores.len()],
                 )
                 .stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT);
 
@@ -373,14 +377,14 @@ impl App {
             }
 
             self.data.frame = (self.data.frame + 1) % MAX_FRAMES_IN_FLIGHT;
-
-            // Update performance metrics
-            let frame_end = Instant::now();
-            let frame_time = frame_end.duration_since(frame_start).as_secs_f32();
-            self.update_metrics(frame_time);
-
-            Ok(())
         }
+
+        // SAFE: Performance metrics calculation
+        let frame_end = Instant::now();
+        let frame_time = frame_end.duration_since(frame_start).as_secs_f32();
+        self.update_metrics(frame_time);
+
+        Ok(())
     }
 
     fn update_metrics(&mut self, frame_time: f32) {
@@ -596,48 +600,49 @@ unsafe fn create_instance(window: &Window, entry: &Entry, _data: &mut AppData) -
 }
 
 unsafe fn pick_physical_device(instance: &Instance, data: &mut AppData) -> Result<()> {
-    unsafe {
-        for physical_device in instance.enumerate_physical_devices()? {
-            let properties = instance.get_physical_device_properties(physical_device);
+    // UNSAFE: Get list of physical devices
+    let physical_devices = unsafe { instance.enumerate_physical_devices()? };
 
-            // Check device API version support
-            let device_version = properties.api_version;
-            log::info!(
-                "Physical device `{}` supports Vulkan {}.{}.{}",
+    for physical_device in physical_devices {
+        // UNSAFE: Get device properties
+        let properties = unsafe { instance.get_physical_device_properties(physical_device) };
+
+        // SAFE: Version checks and logging
+        let device_version = properties.api_version;
+        log::info!(
+            "Physical device `{}` supports Vulkan {}.{}.{}",
+            properties.device_name,
+            vk::version_major(device_version),
+            vk::version_minor(device_version),
+            vk::version_patch(device_version)
+        );
+
+        if let Err(error) = unsafe { check_physical_device(instance, data, physical_device) } {
+            log::warn!(
+                "Skipping physical device (`{}`): {}",
                 properties.device_name,
-                vk::version_major(device_version),
-                vk::version_minor(device_version),
-                vk::version_patch(device_version)
+                error
             );
+        } else {
+            log::info!("Selected physical device (`{}`).", properties.device_name);
 
-            if let Err(error) = check_physical_device(instance, data, physical_device) {
-                log::warn!(
-                    "Skipping physical device (`{}`): {}",
-                    properties.device_name,
-                    error
+            // SAFE: Version comparison and logging
+            if vk::version_major(device_version) >= 1 && vk::version_minor(device_version) >= 4 {
+                log::info!(
+                    "Device supports Vulkan 1.4 - maintenance6 and other 1.4 features available"
                 );
             } else {
-                log::info!("Selected physical device (`{}`).", properties.device_name);
-
-                // Check if device supports Vulkan 1.4
-                if vk::version_major(device_version) >= 1 && vk::version_minor(device_version) >= 4
-                {
-                    log::info!(
-                        "Device supports Vulkan 1.4 - maintenance6 and other 1.4 features available"
-                    );
-                } else {
-                    log::warn!(
-                        "Device does not support Vulkan 1.4 - some features may not be available"
-                    );
-                }
-
-                data.physical_device = physical_device;
-                return Ok(());
+                log::warn!(
+                    "Device does not support Vulkan 1.4 - some features may not be available"
+                );
             }
-        }
 
-        Err(anyhow!("Failed to find suitable physical device."))
+            data.physical_device = physical_device;
+            return Ok(());
+        }
     }
+
+    Err(anyhow!("Failed to find suitable physical device."))
 }
 
 unsafe fn check_physical_device(
@@ -677,70 +682,74 @@ unsafe fn check_physical_device_extensions(
 }
 
 unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Result<Device> {
+    // UNSAFE: Get queue family indices
+    let indices = unsafe { QueueFamilyIndices::get(instance, data, data.physical_device)? };
+
+    // SAFE: HashSet operations and iterator processing
+    let mut unique_indices = HashSet::new();
+    unique_indices.insert(indices.graphics);
+    unique_indices.insert(indices.present);
+
+    let queue_priorities = &[1.0];
+    let queue_infos = unique_indices
+        .iter()
+        .map(|i| {
+            vk::DeviceQueueCreateInfo::builder()
+                .queue_family_index(*i)
+                .queue_priorities(queue_priorities)
+        })
+        .collect::<Vec<_>>();
+
+    let extensions = DEVICE_EXTENSIONS
+        .iter()
+        .map(|n| n.as_ptr())
+        .collect::<Vec<_>>();
+
+    // UNSAFE: Get device properties
+    let properties = unsafe { instance.get_physical_device_properties(data.physical_device) };
+
+    // SAFE: Version checks and logging
+    let device_version = properties.api_version;
+    let supports_vulkan_14 =
+        vk::version_major(device_version) >= 1 && vk::version_minor(device_version) >= 4;
+
+    if supports_vulkan_14 {
+        log::info!("Vulkan 1.4 device detected - maintenance6 and enhanced features available");
+    } else {
+        log::info!("Using basic Vulkan features (pre-1.4 device)");
+    }
+
+    // SAFE: Feature builder patterns
+    let mut sync2_features =
+        vk::PhysicalDeviceSynchronization2Features::builder().synchronization2(true);
+
+    let mut dynamic_rendering_features =
+        vk::PhysicalDeviceDynamicRenderingFeatures::builder().dynamic_rendering(true);
+
+    let mut maintenance4_features =
+        vk::PhysicalDeviceMaintenance4Features::builder().maintenance4(true);
+
+    let mut maintenance5_features =
+        vk::PhysicalDeviceMaintenance5Features::builder().maintenance5(true);
+
+    let mut buffer_device_address_features =
+        vk::PhysicalDeviceBufferDeviceAddressFeatures::builder().buffer_device_address(true);
+
+    let features = vk::PhysicalDeviceFeatures::builder();
+
+    let device_create_info = vk::DeviceCreateInfo::builder()
+        .queue_create_infos(&queue_infos)
+        .enabled_extension_names(&extensions)
+        .enabled_features(&features)
+        .push_next(&mut sync2_features)
+        .push_next(&mut dynamic_rendering_features)
+        .push_next(&mut maintenance4_features)
+        .push_next(&mut maintenance5_features)
+        .push_next(&mut buffer_device_address_features);
+
     unsafe {
-        let indices = QueueFamilyIndices::get(instance, data, data.physical_device)?;
-
-        let mut unique_indices = HashSet::new();
-        unique_indices.insert(indices.graphics);
-        unique_indices.insert(indices.present);
-
-        let queue_priorities = &[1.0];
-        let queue_infos = unique_indices
-            .iter()
-            .map(|i| {
-                vk::DeviceQueueCreateInfo::builder()
-                    .queue_family_index(*i)
-                    .queue_priorities(queue_priorities)
-            })
-            .collect::<Vec<_>>();
-
-        let extensions = DEVICE_EXTENSIONS
-            .iter()
-            .map(|n| n.as_ptr())
-            .collect::<Vec<_>>();
-
-        // Check device properties to determine Vulkan version support
-        let properties = instance.get_physical_device_properties(data.physical_device);
-        let device_version = properties.api_version;
-        let supports_vulkan_14 =
-            vk::version_major(device_version) >= 1 && vk::version_minor(device_version) >= 4;
-
-        // For now, use basic features regardless of version
-        // We've verified the version support above
-        if supports_vulkan_14 {
-            log::info!("Vulkan 1.4 device detected - maintenance6 and enhanced features available");
-        } else {
-            log::info!("Using basic Vulkan features (pre-1.4 device)");
-        }
-
-        let mut sync2_features =
-            vk::PhysicalDeviceSynchronization2Features::builder().synchronization2(true);
-
-        let mut dynamic_rendering_features =
-            vk::PhysicalDeviceDynamicRenderingFeatures::builder().dynamic_rendering(true);
-
-        let mut maintenance4_features =
-            vk::PhysicalDeviceMaintenance4Features::builder().maintenance4(true);
-
-        let mut maintenance5_features =
-            vk::PhysicalDeviceMaintenance5Features::builder().maintenance5(true);
-
-        let mut buffer_device_address_features =
-            vk::PhysicalDeviceBufferDeviceAddressFeatures::builder().buffer_device_address(true);
-
-        let features = vk::PhysicalDeviceFeatures::builder();
-
-        let info = vk::DeviceCreateInfo::builder()
-            .queue_create_infos(&queue_infos)
-            .enabled_extension_names(&extensions)
-            .enabled_features(&features)
-            .push_next(&mut sync2_features)
-            .push_next(&mut dynamic_rendering_features)
-            .push_next(&mut maintenance4_features)
-            .push_next(&mut maintenance5_features)
-            .push_next(&mut buffer_device_address_features);
-
-        let device = instance.create_device(data.physical_device, &info, None)?;
+        // UNSAFE: Vulkan device creation and queue retrieval
+        let device = instance.create_device(data.physical_device, &device_create_info, None)?;
 
         data.graphics_queue = device.get_device_queue(indices.graphics, 0);
         data.present_queue = device.get_device_queue(indices.present, 0);
@@ -1238,18 +1247,36 @@ unsafe fn create_texture_image(
     device: &Device,
     data: &mut AppData,
 ) -> Result<()> {
+    // SAFE: Image loading and size calculations
+    let img = image::open("ferris.png")?.to_rgba8();
+    let (width, height) = (img.width(), img.height());
+    let size = u64::from(width * height * 4);
+
+    // SAFE: Builder patterns for buffer and image creation
+    let staging_buffer_info = vk::BufferCreateInfo::builder()
+        .size(size)
+        .usage(vk::BufferUsageFlags::TRANSFER_SRC)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+    let image_info = vk::ImageCreateInfo::builder()
+        .image_type(vk::ImageType::_2D)
+        .extent(vk::Extent3D {
+            width,
+            height,
+            depth: 1,
+        })
+        .mip_levels(1)
+        .array_layers(1)
+        .format(vk::Format::R8G8B8A8_SRGB)
+        .tiling(vk::ImageTiling::OPTIMAL)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE)
+        .samples(vk::SampleCountFlags::_1);
+
     unsafe {
-        let img = image::open("ferris.png")?.to_rgba8();
-        let (width, height) = (img.width(), img.height());
-        let size = u64::from(width * height * 4);
-
-        // Create staging buffer
-        let buffer_info = vk::BufferCreateInfo::builder()
-            .size(size)
-            .usage(vk::BufferUsageFlags::TRANSFER_SRC)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
-
-        let staging_buffer = device.create_buffer(&buffer_info, None)?;
+        // UNSAFE: Vulkan API calls
+        let staging_buffer = device.create_buffer(&staging_buffer_info, None)?;
 
         let requirements = device.get_buffer_memory_requirements(staging_buffer);
         let memory_type = get_memory_type(
@@ -1259,11 +1286,11 @@ unsafe fn create_texture_image(
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;
 
-        let alloc_info = vk::MemoryAllocateInfo::builder()
+        let staging_alloc_info = vk::MemoryAllocateInfo::builder()
             .allocation_size(requirements.size)
             .memory_type_index(memory_type);
 
-        let staging_buffer_memory = device.allocate_memory(&alloc_info, None)?;
+        let staging_buffer_memory = device.allocate_memory(&staging_alloc_info, None)?;
         device.bind_buffer_memory(staging_buffer, staging_buffer_memory, 0)?;
 
         // Copy image data to staging buffer
@@ -1273,22 +1300,6 @@ unsafe fn create_texture_image(
         device.unmap_memory(staging_buffer_memory);
 
         // Create texture image
-        let image_info = vk::ImageCreateInfo::builder()
-            .image_type(vk::ImageType::_2D)
-            .extent(vk::Extent3D {
-                width,
-                height,
-                depth: 1,
-            })
-            .mip_levels(1)
-            .array_layers(1)
-            .format(vk::Format::R8G8B8A8_SRGB)
-            .tiling(vk::ImageTiling::OPTIMAL)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
-            .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .samples(vk::SampleCountFlags::_1);
-
         data.texture_image = device.create_image(&image_info, None)?;
 
         let requirements = device.get_image_memory_requirements(data.texture_image);
@@ -1299,11 +1310,11 @@ unsafe fn create_texture_image(
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
 
-        let alloc_info = vk::MemoryAllocateInfo::builder()
+        let image_alloc_info = vk::MemoryAllocateInfo::builder()
             .allocation_size(requirements.size)
             .memory_type_index(memory_type);
 
-        data.texture_image_memory = device.allocate_memory(&alloc_info, None)?;
+        data.texture_image_memory = device.allocate_memory(&image_alloc_info, None)?;
         device.bind_image_memory(data.texture_image, data.texture_image_memory, 0)?;
 
         // Transition and copy image

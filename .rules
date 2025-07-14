@@ -1,4 +1,4 @@
-This is a Vulkan 1.4 app using Vulkanalia. It's for personal use on a Windows 11 development machine,
+This is a modern Vulkan 1.4 app using Vulkanalia. It's for personal use on a Windows 11 development machine,
 so we're free to experiment with new Vulkan features.
 
 Please run clippy after each refactor or feature addition.

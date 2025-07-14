@@ -469,6 +469,47 @@ Instead of full GPU-driven rendering, consider:
 
 ---
 
+> 1. I'm not seeing a significant difference with batching. I'd like to disable vsync by default and have a --vsync command line flag to enable it.
+> 2. I'd like our optimizations to focus on consistent frame pacing. Which optimizations could benefit that most?
+> 3. Outside of optimization, I have no current plans to extend this particular application with multiple sprite textures, etc. We're using Vulkan 1.4, but my goal is to take advantage of the new features that make Vulkan easier to use. So let's keep it simple.
+
+```
+FPS: 1816.2 | Frame time: 0.51ms | Sprites: 1000 | Sprites/sec: 1816220 | Resolution: 1920x1080
+```
+
+The key optimizations for consistent frame pacing are:
+
+#### **A. Memory Management & Allocation Consistency**
+**Issue**: Currently making small allocations each frame
+**Solution**: Pre-allocate or use memory pools
+
+#### **B. CPU-GPU Synchronization**
+**Issue**: Currently using `map_memory` every frame
+**Solution**: Use persistent mapped memory or double-buffered approach
+
+#### **C. Command Buffer Management**
+**Issue**: Resetting command buffers each frame
+**Solution**: Pre-record static parts
+
+✅ **What We've Successfully Implemented:**
+
+1. **VSync Control**: `--vsync` flag (defaults to disabled)
+   - **Without VSync**: ~1600-1700 FPS
+   - **With VSync**: ~115-120 FPS (adaptive based on display)
+
+2. **Modern Vulkan 1.4 Features (Simple & Effective)**:
+   - **Dynamic rendering** (no render passes)
+   - **Buffer device addresses** (with descriptor fallback)
+   - **Maintenance features** enabled
+   - **Validation layers** for best practices
+
+3. **Frame Pacing Optimizations**:
+   - **Persistent mapped memory** (eliminates map/unmap overhead)
+   - **Instanced rendering** (one draw call for all sprites)
+   - **Procedural vertex generation** (no vertex buffers)
+
+
+
 ## Maybe Later
 
 * VK_EXT_debug_utils in debug releases to give names to objects ?

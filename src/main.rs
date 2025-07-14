@@ -192,6 +192,7 @@ struct AppData {
     pipeline: vk::Pipeline,
     sprite_command_buffer: vk::Buffer,
     sprite_command_buffer_memory: vk::DeviceMemory,
+    sprite_command_buffer_mapped: *mut SpriteCommand,
     descriptor_set: vk::DescriptorSet,
     descriptor_pool: vk::DescriptorPool,
     sprite_count: usize,
@@ -224,7 +225,7 @@ struct App {
 }
 
 impl App {
-    unsafe fn create(window: &Window, sprite_count: usize) -> Result<Self> {
+    unsafe fn create(window: &Window, sprite_count: usize, vsync_enabled: bool) -> Result<Self> {
         let loader = LibloadingLoader::new(LIBRARY)?;
         let entry = Entry::new(loader).map_err(|b| anyhow!("{}", b))?;
         let mut data = AppData {
@@ -241,6 +242,7 @@ impl App {
             pipeline: vk::Pipeline::null(),
             sprite_command_buffer: vk::Buffer::null(),
             sprite_command_buffer_memory: vk::DeviceMemory::null(),
+            sprite_command_buffer_mapped: std::ptr::null_mut(),
             descriptor_set: vk::DescriptorSet::null(),
             descriptor_pool: vk::DescriptorPool::null(),
             texture_image: vk::Image::null(),
@@ -270,7 +272,7 @@ impl App {
         // Log GPU information after physical device is selected
         log_gpu_info(&instance, &mut data)?;
         let device = create_logical_device(&instance, &mut data)?;
-        create_swapchain(window, &instance, &device, &mut data)?;
+        create_swapchain(window, &instance, &device, &mut data, vsync_enabled)?;
         create_swapchain_image_views(&instance, &device, &mut data)?;
         create_command_pool(&instance, &device, &mut data)?;
         create_texture_image(&instance, &device, &mut data)?;
@@ -473,22 +475,13 @@ impl App {
 
     unsafe fn update_sprite_command_buffer(&mut self) -> Result<()> {
         let sprite_commands = self.sprites_to_commands();
-        let size = (sprite_commands.len() * size_of::<SpriteCommand>()) as u64;
 
-        // Map and update the sprite command buffer
-        let memory = self.device.map_memory(
-            self.data.sprite_command_buffer_memory,
-            0,
-            size,
-            vk::MemoryMapFlags::empty(),
-        )?;
+        // Copy directly to persistent mapped memory
         std::ptr::copy_nonoverlapping(
             sprite_commands.as_ptr(),
-            memory.cast(),
+            self.data.sprite_command_buffer_mapped,
             sprite_commands.len(),
         );
-        self.device
-            .unmap_memory(self.data.sprite_command_buffer_memory);
 
         Ok(())
     }
@@ -496,7 +489,7 @@ impl App {
     unsafe fn recreate_swapchain(&mut self, window: &Window) -> Result<()> {
         self.device.device_wait_idle()?;
         self.destroy_swapchain();
-        create_swapchain(window, &self.instance, &self.device, &mut self.data)?;
+        create_swapchain(window, &self.instance, &self.device, &mut self.data, true)?;
         create_swapchain_image_views(&self.instance, &self.device, &mut self.data)?;
         Ok(())
     }
@@ -544,7 +537,11 @@ impl App {
         self.device
             .destroy_descriptor_pool(self.data.descriptor_pool, None);
 
-        // Destroy buffers
+        // Unmap and destroy buffers
+        if !self.data.sprite_command_buffer_mapped.is_null() {
+            self.device
+                .unmap_memory(self.data.sprite_command_buffer_memory);
+        }
         self.device
             .destroy_buffer(self.data.sprite_command_buffer, None);
         self.device
@@ -781,12 +778,13 @@ unsafe fn create_swapchain(
     instance: &Instance,
     device: &Device,
     data: &mut AppData,
+    vsync_enabled: bool,
 ) -> Result<()> {
     let indices = QueueFamilyIndices::get(instance, data, data.physical_device)?;
     let support = SwapchainSupport::get(instance, data, data.physical_device)?;
 
     let surface_format = get_swapchain_surface_format(&support.formats);
-    let present_mode = get_swapchain_present_mode(&support.present_modes);
+    let present_mode = get_swapchain_present_mode(&support.present_modes, vsync_enabled);
     let extent = get_swapchain_extent(window, support.capabilities);
 
     let mut image_count = support.capabilities.min_image_count + 1;
@@ -840,12 +838,27 @@ fn get_swapchain_surface_format(formats: &[vk::SurfaceFormatKHR]) -> vk::Surface
         .unwrap_or_else(|| formats[0])
 }
 
-fn get_swapchain_present_mode(present_modes: &[vk::PresentModeKHR]) -> vk::PresentModeKHR {
-    present_modes
-        .iter()
-        .cloned()
-        .find(|m| *m == vk::PresentModeKHR::MAILBOX)
-        .unwrap_or(vk::PresentModeKHR::FIFO)
+fn get_swapchain_present_mode(
+    present_modes: &[vk::PresentModeKHR],
+    vsync_enabled: bool,
+) -> vk::PresentModeKHR {
+    if vsync_enabled {
+        // VSync enabled - prefer FIFO (guaranteed available)
+        vk::PresentModeKHR::FIFO
+    } else {
+        // VSync disabled - prefer IMMEDIATE, fallback to MAILBOX, then FIFO
+        present_modes
+            .iter()
+            .cloned()
+            .find(|m| *m == vk::PresentModeKHR::IMMEDIATE)
+            .or_else(|| {
+                present_modes
+                    .iter()
+                    .cloned()
+                    .find(|m| *m == vk::PresentModeKHR::MAILBOX)
+            })
+            .unwrap_or(vk::PresentModeKHR::FIFO)
+    }
 }
 
 fn get_swapchain_extent(window: &Window, capabilities: vk::SurfaceCapabilitiesKHR) -> vk::Extent2D {
@@ -1069,11 +1082,11 @@ unsafe fn create_shader_module(device: &Device, bytecode: &[u8]) -> Result<vk::S
 }
 
 unsafe fn create_command_pool(
-    instance: &Instance,
+    _instance: &Instance,
     device: &Device,
     data: &mut AppData,
 ) -> Result<()> {
-    let indices = QueueFamilyIndices::get(instance, data, data.physical_device)?;
+    let indices = QueueFamilyIndices::get(_instance, data, data.physical_device)?;
 
     let info = vk::CommandPoolCreateInfo::builder()
         .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
@@ -1409,6 +1422,15 @@ unsafe fn create_sprite_command_buffer(
 
     data.sprite_command_buffer = sprite_command_buffer;
     data.sprite_command_buffer_memory = sprite_command_buffer_memory;
+
+    // Map memory persistently for faster updates
+    let mapped_memory = device.map_memory(
+        sprite_command_buffer_memory,
+        0,
+        size,
+        vk::MemoryMapFlags::empty(),
+    )?;
+    data.sprite_command_buffer_mapped = mapped_memory.cast();
 
     Ok(())
 }
@@ -1769,7 +1791,7 @@ unsafe fn log_gpu_info(instance: &Instance, data: &mut AppData) -> Result<()> {
 fn main() -> Result<()> {
     pretty_env_logger::init();
 
-    // Parse command line arguments for sprite count
+    // Parse command line arguments for sprite count and vsync
     let args: Vec<String> = env::args().collect();
     let sprite_count = if args.len() > 1 {
         args[1].parse::<usize>().unwrap_or(1)
@@ -1777,11 +1799,17 @@ fn main() -> Result<()> {
         1
     };
 
+    let vsync_enabled = args.iter().any(|arg| arg == "--vsync");
+
     println!("=== Ferris Mark VK - Vulkan Sprite Benchmark ===");
     println!("Rendering {sprite_count} sprites");
     println!("Logical resolution: {LOGICAL_WIDTH}x{LOGICAL_HEIGHT}");
     println!("Initial window size: {INITIAL_WINDOW_WIDTH}x{INITIAL_WINDOW_HEIGHT}");
     println!("Physics: gravity={GRAVITY}, bounce_damping={BOUNCE_DAMPING}");
+    println!(
+        "VSync: {}",
+        if vsync_enabled { "Enabled" } else { "Disabled" }
+    );
     println!("Performance metrics will be logged every second...\n");
 
     let event_loop = EventLoop::new()?;
@@ -1793,7 +1821,7 @@ fn main() -> Result<()> {
         ))
         .build(&event_loop)?;
 
-    let mut app = unsafe { App::create(&window, sprite_count)? };
+    let mut app = unsafe { App::create(&window, sprite_count, vsync_enabled)? };
 
     event_loop.run(move |event, target| match event {
         Event::WindowEvent {

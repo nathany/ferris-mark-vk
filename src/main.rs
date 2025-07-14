@@ -58,6 +58,10 @@ const MIN_INITIAL_VERTICAL_VELOCITY: f32 = 5.0; // Minimum initial upward veloci
 const MAX_INITIAL_VERTICAL_VELOCITY: f32 = 10.0; // Maximum initial upward velocity
 const MAX_BOUNCE_BOOST: f32 = 9.0; // Maximum random upward boost on bounce
 
+// Swapchain configuration constants
+const SWAPCHAIN_IMAGE_ARRAY_LAYERS: u32 = 1; // Always 1 unless doing stereoscopic 3D
+const MIN_SWAPCHAIN_IMAGE_COUNT_OFFSET: u32 = 1; // Request this many more than minimum for better performance
+
 // Represents a single sprite in our physics simulation
 #[derive(Clone, Debug)]
 struct Sprite {
@@ -172,6 +176,83 @@ struct SwapchainSupport {
     capabilities: vk::SurfaceCapabilitiesKHR, // Image count, size limits, etc.
     formats: Vec<vk::SurfaceFormatKHR>,       // Available pixel formats (RGBA, BGRA, etc.)
     present_modes: Vec<vk::PresentModeKHR>,   // Timing modes (VSync, immediate, etc.)
+}
+
+// Configuration for swapchain creation using builder pattern
+#[derive(Debug)]
+struct SwapchainConfig {
+    surface_format: vk::SurfaceFormatKHR,
+    present_mode: vk::PresentModeKHR,
+    extent: vk::Extent2D,
+    image_count: u32,
+    image_sharing_mode: vk::SharingMode,
+    queue_family_indices: Vec<u32>,
+}
+
+impl SwapchainConfig {
+    fn new(
+        window: &Window,
+        support: &SwapchainSupport,
+        indices: &QueueFamilyIndices,
+        vsync_enabled: bool,
+    ) -> Self {
+        let surface_format = get_swapchain_surface_format(&support.formats);
+        let present_mode = get_swapchain_present_mode(&support.present_modes, vsync_enabled);
+        let extent = get_swapchain_extent(window, support.capabilities);
+
+        // Request one more image than minimum for better performance
+        let mut image_count =
+            support.capabilities.min_image_count + MIN_SWAPCHAIN_IMAGE_COUNT_OFFSET;
+        if support.capabilities.max_image_count != 0
+            && image_count > support.capabilities.max_image_count
+        {
+            image_count = support.capabilities.max_image_count;
+        }
+
+        // Handle queue family sharing for the images
+        let (image_sharing_mode, queue_family_indices) = if indices.graphics != indices.present {
+            // Different queues need concurrent access
+            (
+                vk::SharingMode::CONCURRENT,
+                vec![indices.graphics, indices.present],
+            )
+        } else {
+            // Same queue family can use exclusive access (better performance)
+            (vk::SharingMode::EXCLUSIVE, vec![])
+        };
+
+        Self {
+            surface_format,
+            present_mode,
+            extent,
+            image_count,
+            image_sharing_mode,
+            queue_family_indices,
+        }
+    }
+
+    fn create_info(
+        &self,
+        surface: vk::SurfaceKHR,
+        capabilities: &vk::SurfaceCapabilitiesKHR,
+    ) -> vk::SwapchainCreateInfoKHR {
+        vk::SwapchainCreateInfoKHR::builder()
+            .surface(surface)
+            .min_image_count(self.image_count)
+            .image_format(self.surface_format.format)
+            .image_color_space(self.surface_format.color_space)
+            .image_extent(self.extent)
+            .image_array_layers(SWAPCHAIN_IMAGE_ARRAY_LAYERS) // Always 1 unless doing stereoscopic 3D
+            .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT) // We'll render into these
+            .image_sharing_mode(self.image_sharing_mode)
+            .queue_family_indices(&self.queue_family_indices)
+            .pre_transform(capabilities.current_transform) // Don't transform images
+            .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE) // Don't blend with other windows
+            .present_mode(self.present_mode)
+            .clipped(true) // Don't care about obscured pixels
+            .old_swapchain(vk::SwapchainKHR::null()) // Not recreating an existing swapchain
+            .build()
+    }
 }
 
 impl SwapchainSupport {
@@ -376,7 +457,9 @@ impl App {
 
             let image_index = match result {
                 Ok((image_index, _)) => image_index as usize,
-                Err(vk::ErrorCode::OUT_OF_DATE_KHR) => return self.recreate_swapchain(window),
+                Err(vk::ErrorCode::OUT_OF_DATE_KHR) => {
+                    return self.handle_swapchain_recreation(window);
+                }
                 Err(e) => return Err(anyhow!("{}", e)),
             };
 
@@ -435,7 +518,7 @@ impl App {
             match result {
                 Ok(_) => {}
                 Err(vk::ErrorCode::OUT_OF_DATE_KHR) => {
-                    self.recreate_swapchain(window)?;
+                    self.handle_swapchain_recreation(window)?;
                 }
                 Err(e) => return Err(anyhow!("{}", e)),
             }
@@ -547,13 +630,43 @@ impl App {
         }
     }
 
+    // Handles swapchain recreation with consolidated logic
+    unsafe fn handle_swapchain_recreation(&mut self, window: &Window) -> Result<()> {
+        log::debug!("Recreating swapchain due to window changes or out-of-date swapchain");
+        unsafe { self.recreate_swapchain(window) }
+    }
+
     // Recreates swapchain when window is resized or other changes occur
     unsafe fn recreate_swapchain(&mut self, window: &Window) -> Result<()> {
         unsafe {
             // Wait for all operations to complete before recreating
             self.device.device_wait_idle()?;
+
+            // Clean up old swapchain resources
             self.destroy_swapchain();
-            create_swapchain(window, &self.instance, &self.device, &mut self.data, true)?;
+
+            // Create new swapchain and associated resources
+            self.create_swapchain_and_views(window, true)?;
+
+            log::debug!("Swapchain recreated successfully");
+            Ok(())
+        }
+    }
+
+    // Creates swapchain and image views together for better organization
+    unsafe fn create_swapchain_and_views(
+        &mut self,
+        window: &Window,
+        vsync_enabled: bool,
+    ) -> Result<()> {
+        unsafe {
+            create_swapchain(
+                window,
+                &self.instance,
+                &self.device,
+                &mut self.data,
+                vsync_enabled,
+            )?;
             create_swapchain_image_views(&self.instance, &self.device, &mut self.data)?;
             Ok(())
         }
@@ -562,11 +675,19 @@ impl App {
     // Cleans up swapchain resources
     unsafe fn destroy_swapchain(&mut self) {
         unsafe {
-            for image_view in &self.data.swapchain_image_views {
-                self.device.destroy_image_view(*image_view, None);
+            // Destroy all image views first
+            for &image_view in &self.data.swapchain_image_views {
+                self.device.destroy_image_view(image_view, None);
             }
             self.data.swapchain_image_views.clear();
-            self.device.destroy_swapchain_khr(self.data.swapchain, None);
+
+            // Then destroy the swapchain itself
+            if self.data.swapchain != vk::SwapchainKHR::null() {
+                self.device.destroy_swapchain_khr(self.data.swapchain, None);
+                self.data.swapchain = vk::SwapchainKHR::null();
+            }
+
+            log::debug!("Swapchain resources destroyed");
         }
     }
 
@@ -855,51 +976,22 @@ unsafe fn create_swapchain(
         let indices = QueueFamilyIndices::get(instance, data, data.physical_device)?;
         let support = SwapchainSupport::get(instance, data, data.physical_device)?;
 
-        // Choose the best format, present mode, and extent for our swapchain
-        let surface_format = get_swapchain_surface_format(&support.formats);
-        let present_mode = get_swapchain_present_mode(&support.present_modes, vsync_enabled);
-        let extent = get_swapchain_extent(window, support.capabilities);
-
-        // Request one more image than minimum for better performance
-        let mut image_count = support.capabilities.min_image_count + 1;
-        if support.capabilities.max_image_count != 0
-            && image_count > support.capabilities.max_image_count
-        {
-            image_count = support.capabilities.max_image_count;
-        }
-
-        // Handle queue family sharing for the images
-        let mut queue_family_indices = vec![];
-        let image_sharing_mode = if indices.graphics != indices.present {
-            // Different queues need concurrent access
-            queue_family_indices.push(indices.graphics);
-            queue_family_indices.push(indices.present);
-            vk::SharingMode::CONCURRENT
-        } else {
-            // Same queue family can use exclusive access (better performance)
-            vk::SharingMode::EXCLUSIVE
-        };
-
-        let info = vk::SwapchainCreateInfoKHR::builder()
-            .surface(data.surface)
-            .min_image_count(image_count)
-            .image_format(surface_format.format)
-            .image_color_space(surface_format.color_space)
-            .image_extent(extent)
-            .image_array_layers(1) // Always 1 unless doing stereoscopic 3D
-            .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT) // We'll render into these
-            .image_sharing_mode(image_sharing_mode)
-            .queue_family_indices(&queue_family_indices)
-            .pre_transform(support.capabilities.current_transform) // Don't transform images
-            .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE) // Don't blend with other windows
-            .present_mode(present_mode)
-            .clipped(true) // Don't care about obscured pixels
-            .old_swapchain(vk::SwapchainKHR::null()); // Not recreating an existing swapchain
+        // Create swapchain configuration using builder pattern
+        let config = SwapchainConfig::new(window, &support, &indices, vsync_enabled);
+        log::debug!(
+            "Swapchain config: {}x{}, format: {:?}, present_mode: {:?}, images: {}",
+            config.extent.width,
+            config.extent.height,
+            config.surface_format.format,
+            config.present_mode,
+            config.image_count
+        );
+        let info = config.create_info(data.surface, &support.capabilities);
 
         data.swapchain = device.create_swapchain_khr(&info, None)?;
         data.swapchain_images = device.get_swapchain_images_khr(data.swapchain)?;
-        data.swapchain_format = surface_format.format;
-        data.swapchain_extent = extent;
+        data.swapchain_format = config.surface_format.format;
+        data.swapchain_extent = config.extent;
 
         Ok(())
     }
@@ -969,26 +1061,34 @@ unsafe fn create_swapchain_image_views(
     data: &mut AppData,
 ) -> Result<()> {
     unsafe {
+        // Create subresource range for color images (used by all image views)
+        let subresource_range = vk::ImageSubresourceRange::builder()
+            .aspect_mask(vk::ImageAspectFlags::COLOR) // Color data (not depth/stencil)
+            .base_mip_level(0) // Start at mip level 0 (full resolution)
+            .level_count(1) // Use 1 mip level (no mipmapping)
+            .base_array_layer(0) // Start at array layer 0
+            .layer_count(1) // Use 1 array layer (not an array texture)
+            .build();
+
         data.swapchain_image_views = data
             .swapchain_images
             .iter()
-            .map(|i| {
+            .map(|&image| {
                 let info = vk::ImageViewCreateInfo::builder()
-                    .image(*i)
+                    .image(image)
                     .view_type(vk::ImageViewType::_2D) // 2D texture (not 1D, 3D, or cubemap)
                     .format(data.swapchain_format)
-                    .subresource_range(
-                        vk::ImageSubresourceRange::builder()
-                            .aspect_mask(vk::ImageAspectFlags::COLOR) // Color data (not depth/stencil)
-                            .base_mip_level(0) // Start at mip level 0 (full resolution)
-                            .level_count(1) // Use 1 mip level (no mipmapping)
-                            .base_array_layer(0) // Start at array layer 0
-                            .layer_count(1) // Use 1 array layer (not an array texture)
-                            .build(),
-                    );
+                    .subresource_range(subresource_range)
+                    .build();
+
                 device.create_image_view(&info, None)
             })
             .collect::<Result<Vec<_>, _>>()?;
+
+        log::debug!(
+            "Created {} swapchain image views",
+            data.swapchain_image_views.len()
+        );
         Ok(())
     }
 }

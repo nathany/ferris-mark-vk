@@ -1329,7 +1329,7 @@ unsafe fn record_command_buffer(
 
         let color_clear_value = vk::ClearValue {
             color: vk::ClearColorValue {
-                float32: [0.0, 0.0, 0.0, 1.0], // Black background - better for GPU compression
+                float32: [0.0, 0.0, 0.0, 0.0], // Black background - optimal for GPU compression with sRGB
             },
         };
 

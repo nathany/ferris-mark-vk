@@ -737,16 +737,26 @@ The swapchain recreation logic is scattered and could be consolidated for better
 
 ---
 
-> Are we benefiting from the anyhow crate? Is error handling more concise with it?
+> Should we fix this validation warning from NVIDIA?
+
+> Validation Performance Warning: [ BestPractices-NVIDIA-ClearColor-NotCompressed ] | MessageID = 0x916108d1
+> vkCmdBeginRendering(): pRenderingInfo->pColorAttachments[0] [NVIDIA] Clearing image with format VK_FORMAT_B8G8R8A8_SRGB without a 1.0f or 0.0f clear color. The clear will not get compressed in the GPU, harming performance. This can be fixed using a clear color of VkClearColorValue{0.0f, 0.0f, 0.0f, 0.0f}, or VkClearColorValue{1.0f, 1.0f, 1.0f, 1.0f}. Alternatively, use VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_A8B8G8R8_UNORM_PACK32, VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_FORMAT_R16G16B16A16_UNORM, VK_FORMAT_R16G16B16A16_SNORM, VK_FORMAT_R16G16B16A16_UINT, VK_FORMAT_R16G16B16A16_SINT, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R32G32B32A32_SFLOAT, or VK_FORMAT_B10G11R11_UFLOAT_PACK32.
+> Objects: 1
+>    [0] VkCommandBuffer 0x21915374020
+
+Issue Fixed:** ✅ NVIDIA validation warning about clear color compression
+
+**Change Made:**
+- Changed the clear color from `[0.0, 0.0, 0.0, 1.0]` to `[0.0, 0.0, 0.0, 0.0]` in the `record_command_buffer` function
+- This provides optimal GPU compression for the `VK_FORMAT_B8G8R8A8_SRGB` swapchain format
+
+---
+
 
 ## Maybe Later
 
 **Memory usage profiling**: Understand actual memory consumption patterns
 
-Validation Performance Warning: [ BestPractices-NVIDIA-ClearColor-NotCompressed ] | MessageID = 0x916108d1
-vkCmdBeginRendering(): pRenderingInfo->pColorAttachments[0] [NVIDIA] Clearing image with format VK_FORMAT_B8G8R8A8_SRGB without a 1.0f or 0.0f clear color. The clear will not get compressed in the GPU, harming performance. This can be fixed using a clear color of VkClearColorValue{0.0f, 0.0f, 0.0f, 0.0f}, or VkClearColorValue{1.0f, 1.0f, 1.0f, 1.0f}. Alternatively, use VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_A8B8G8R8_UNORM_PACK32, VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_FORMAT_R16G16B16A16_UNORM, VK_FORMAT_R16G16B16A16_SNORM, VK_FORMAT_R16G16B16A16_UINT, VK_FORMAT_R16G16B16A16_SINT, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R32G32B32A32_SFLOAT, or VK_FORMAT_B10G11R11_UFLOAT_PACK32.
-Objects: 1
-    [0] VkCommandBuffer 0x21915374020
 
 Validation Performance Warning: [ BestPractices-vkAllocateMemory-small-allocation ] | MessageID = 0xfd92477a
 vkAllocateMemory(): pAllocateInfo->allocationSize is 27720. This is a very small allocation (current threshold is 262144 bytes). You should make large allocations and sub-allocate from one large VkDeviceMemory.

@@ -636,11 +636,12 @@ FPS: 82.9 | Frame time: 11.99ms | Sprites: 50000 | Sprites/sec: 4146880 | Resolu
 
 ---
 
-> Please upgrade this project to Rust 2024. This will require a lot of changes to how we're using unsafe.
 
->
+
 
 ---
+
+
 
 ## Maybe Later
 

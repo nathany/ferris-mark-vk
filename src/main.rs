@@ -22,8 +22,8 @@ const DEVICE_EXTENSIONS: &[vk::ExtensionName] = &[vk::KHR_SWAPCHAIN_EXTENSION.na
 const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
 // Logical resolution constants
-const LOGICAL_WIDTH: f32 = 640.0;
-const LOGICAL_HEIGHT: f32 = 360.0;
+const LOGICAL_WIDTH: f32 = 1280.0;
+const LOGICAL_HEIGHT: f32 = 720.0;
 
 // Sprite helper functions using glam types
 const fn sprite_quad(pos_x: f32, pos_y: f32, size_x: f32, size_y: f32) -> [Vertex; 4] {
@@ -79,8 +79,8 @@ impl Vertex {
     }
 }
 
-// Sprite positioned at (100, 100) with size 200x200 in logical coordinates
-const VERTICES: &[Vertex] = &sprite_quad(100.0, 100.0, 200.0, 200.0);
+// Sprite positioned at (200, 100) with size 99x70 in logical coordinates (matches PNG dimensions)
+const VERTICES: &[Vertex] = &sprite_quad(0.0, 0.0, 99.0, 70.0);
 
 const INDICES: &[u16] = &[0, 1, 2, 2, 3, 0];
 

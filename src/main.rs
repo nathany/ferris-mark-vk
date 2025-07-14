@@ -228,6 +228,11 @@ struct AppData {
     sprite_count: usize,
     sprites: Vec<Sprite>,
     last_update: Instant,
+
+    // Performance metrics
+    frame_count: u32,
+    last_metrics_time: Instant,
+    accumulated_frame_time: f32,
     texture_image: vk::Image,
     texture_image_memory: vk::DeviceMemory,
     texture_image_view: vk::ImageView,
@@ -283,10 +288,18 @@ impl App {
             sprite_count,
             sprites: generate_sprites(sprite_count),
             last_update: Instant::now(),
+
+            // Initialize metrics
+            frame_count: 0,
+            last_metrics_time: Instant::now(),
+            accumulated_frame_time: 0.0,
         };
         let instance = create_instance(window, &entry, &mut data)?;
         data.surface = vk_window::create_surface(&instance, window, window)?;
         pick_physical_device(&instance, &mut data)?;
+
+        // Log GPU information after physical device is selected
+        log_gpu_info(&instance, &mut data)?;
         let device = create_logical_device(&instance, &mut data)?;
         create_swapchain(window, &instance, &device, &mut data)?;
         create_swapchain_image_views(&instance, &device, &mut data)?;
@@ -308,6 +321,8 @@ impl App {
     }
 
     unsafe fn render(&mut self, window: &Window) -> Result<()> {
+        let frame_start = Instant::now();
+
         // Update sprite physics
         let now = Instant::now();
         let dt = now.duration_since(self.data.last_update).as_secs_f32();
@@ -396,7 +411,46 @@ impl App {
 
         self.data.frame = (self.data.frame + 1) % MAX_FRAMES_IN_FLIGHT;
 
+        // Update performance metrics
+        let frame_end = Instant::now();
+        let frame_time = frame_end.duration_since(frame_start).as_secs_f32();
+        self.update_metrics(frame_time);
+
         Ok(())
+    }
+
+    fn update_metrics(&mut self, frame_time: f32) {
+        self.data.frame_count += 1;
+        self.data.accumulated_frame_time += frame_time;
+
+        let now = Instant::now();
+        let elapsed = now
+            .duration_since(self.data.last_metrics_time)
+            .as_secs_f32();
+
+        // Log metrics every second
+        if elapsed >= 1.0 {
+            let fps = self.data.frame_count as f32 / elapsed;
+            let avg_frame_time =
+                (self.data.accumulated_frame_time / self.data.frame_count as f32) * 1000.0;
+            let sprites_per_second = fps * self.data.sprites.len() as f32;
+
+            // Get window info
+            let window_size = format!(
+                "{}x{}",
+                self.data.swapchain_extent.width, self.data.swapchain_extent.height
+            );
+
+            println!(
+                "FPS: {fps:.1} | Frame time: {avg_frame_time:.2}ms | Sprites: {} | Sprites/sec: {sprites_per_second:.0} | Resolution: {window_size}",
+                self.data.sprites.len()
+            );
+
+            // Reset metrics
+            self.data.frame_count = 0;
+            self.data.accumulated_frame_time = 0.0;
+            self.data.last_metrics_time = now;
+        }
     }
 
     fn update_sprites(&mut self, dt: f32) {
@@ -1770,6 +1824,24 @@ fn create_sprite_transform(window_width: f32, window_height: f32) -> [[f32; 4]; 
     transform.to_cols_array_2d()
 }
 
+unsafe fn log_gpu_info(instance: &Instance, data: &mut AppData) -> Result<()> {
+    if data.physical_device != vk::PhysicalDevice::null() {
+        let properties = instance.get_physical_device_properties(data.physical_device);
+        let device_name =
+            std::ffi::CStr::from_ptr(properties.device_name.as_ptr()).to_string_lossy();
+        println!("GPU: {device_name}");
+
+        let api_version = properties.api_version;
+        println!(
+            "Vulkan API: {}.{}.{}",
+            vk::version_major(api_version),
+            vk::version_minor(api_version),
+            vk::version_patch(api_version)
+        );
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     pretty_env_logger::init();
 
@@ -1781,7 +1853,12 @@ fn main() -> Result<()> {
         1
     };
 
+    println!("=== Ferris Mark VK - Vulkan Sprite Benchmark ===");
     println!("Rendering {sprite_count} sprites");
+    println!("Logical resolution: {LOGICAL_WIDTH}x{LOGICAL_HEIGHT}");
+    println!("Initial window size: {INITIAL_WINDOW_WIDTH}x{INITIAL_WINDOW_HEIGHT}");
+    println!("Physics: gravity={GRAVITY}, bounce_damping={BOUNCE_DAMPING}");
+    println!("Performance metrics will be logged every second...\n");
 
     let event_loop = EventLoop::new()?;
     let window = WindowBuilder::new()

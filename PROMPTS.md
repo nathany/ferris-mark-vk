@@ -536,13 +536,80 @@ FPS: 82.9 | Frame time: 11.99ms | Sprites: 50000 | Sprites/sec: 4146880 | Resolu
 ✅ What Actually Helped:**
 - **Removing alpha discard**: Better tile-based GPU performance
 
+---
 
+> Alright. That was a good optimization session! Please summarize what we did, what we chose not to do (and why), and what we might yet do. Thanks.
 
+🎯 Optimization Session Summary
+
+## **✅ What We Successfully Implemented**
+
+### **Phase 1: Core Architecture Overhaul**
+- **Procedural vertex generation**: Eliminated vertex buffers entirely, generate quads in vertex shader using `gl_VertexIndex`
+- **Instanced rendering**: One `vkCmdDraw(6, sprite_count, 0, 0)` call instead of multiple draw calls
+- **Sprite command system**: GPU buffer with transform matrices, colors, and UV coordinates
+- **Buffer device addresses → Descriptor sets**: Started with modern buffer device addresses, simplified to standard descriptor sets for better debugging
+
+### **Phase 2: Performance & Usability Improvements**
+- **VSync control**: Added `--vsync` flag (defaults to disabled for benchmarking)
+- **Persistent mapped memory**: Eliminated expensive `map_memory`/`unmap_memory` calls every frame
+- **SIMD physics optimization**: Replaced individual `f32` components with `glam::Vec2` for vectorized operations
+- **Alpha discard removal**: Removed fragment shader discard for better tile-based GPU performance
+
+### **Phase 3: Code Quality**
+- **Fixed all clippy warnings**: Removed unused vertex buffer code, cleaned up imports
+- **Addressed validation layer best practices**: Fixed buffer device address allocation flags
+- **Modern Vulkan 1.4 features**: Dynamic rendering, maintenance features, proper feature enablement
+
+## What We Chose NOT to Do (And Why)
+
+### **Complex GPU-Driven Commands**
+- **Why avoided**: Debugging concerns (your explicit request)
+- **Alternative chosen**: CPU-prepared commands with GPU consumption via descriptor sets
+- **Trade-off**: Slightly less optimal but much more debugger-friendly
+
+### **Frustum/Viewport Culling**
+- **Why avoided**: Sprites are constrained to viewport bounds anyway
+- **Impact**: Would provide ~0-2% benefit at best
+
+### **Occlusion Culling with Alpha Testing**
+- **Why avoided**: Massive implementation complexity for 2D sprites
+- **Would require**: Depth sorting, per-pixel alpha analysis, visibility calculations
+- **Trade-off**: Theoretical benefits not worth the development/maintenance cost
+
+### **Spatial Sorting for Cache Locality**
+- **Why removed**: Sorting overhead every frame exceeded cache benefits
+- **Tested**: Showed 50% performance decrease (380 FPS → 200 FPS)
+- **Modern reality**: CPU cache prediction is quite good
+
+### **Multiple Texture/Shader Support**
+- **Why avoided**: Your explicit requirement to keep it simple
+- **Current constraint**: Single texture, single shader = no state sorting benefits
+
+🔮 What We Might Yet Do**
+
+### **Low-Hanging Fruit (If Desired)**
+1. **Vulkan Memory Allocator (VMA)**
+   - **Benefit**: Eliminates validation layer "small allocation" warnings
+   - **Effort**: Low (add dependency, replace allocation calls)
+   - **Impact**: Cleaner validation, better memory efficiency
+
+2. **Frame Rate Limiting**
+   - **Feature**: `--target-fps N` flag for testing consistency
+   - **Benefit**: Better frame pacing analysis tools
+   - **Effort**: Very low
+
+3. **SIMD Physics Further Optimization**
+   - **Opportunity**: Batch process multiple sprites with SIMD
+   - **Benefit**: Potential 2-4x physics performance
+   - **Effort**: Medium (requires algorithm restructuring)
+
+## Maybe Later
+
+**Memory usage profiling**: Understand actual memory consumption patterns
 
 Validation Performance Warning: [ BestPractices-vkAllocateMemory-small-allocation ] | MessageID = 0xfd92477a
 vkAllocateMemory(): pAllocateInfo->allocationSize is 27720. This is a very small allocation (current threshold is 262144 bytes). You should make large allocations and sub-allocate from one large VkDeviceMemory.
-
-## Maybe Later
 
 Question -- our frame times and FPS bounce around quite a bit each second. But I'm wondering how much of that is an issue with our rendering, vs. our metrics? Maybe we should be using an external tool?
 

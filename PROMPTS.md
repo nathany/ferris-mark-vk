@@ -690,6 +690,18 @@ Total Impact Across All Refactoring:
 - **Improved readability** with clear safe/unsafe separation
 - **Better maintainability** - safe sections can be modified confidently
 
+Key Patterns Established:
+
+1. **Dependency analysis**: Check what actually needs to be unsafe vs what can be moved
+2. **Consolidation**: Group unsafe operations together when possible
+3. **Clear separation**: Safe setup operations first, unsafe API calls together
+4. **Minimal unsafe surface**: Only the truly necessary operations remain unsafe
+
+---
+
+> Please go through all the code and add concise comments suitable for someone still learning Vulkan.
+> If you identify any areas where the code itself can be made more readable and concise, please let me know.
+
 ## Maybe Later
 
 **Memory usage profiling**: Understand actual memory consumption patterns

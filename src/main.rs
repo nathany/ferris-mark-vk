@@ -22,8 +22,12 @@ const DEVICE_EXTENSIONS: &[vk::ExtensionName] = &[vk::KHR_SWAPCHAIN_EXTENSION.na
 const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
 // Logical resolution constants
-const LOGICAL_WIDTH: f32 = 1280.0;
-const LOGICAL_HEIGHT: f32 = 720.0;
+const LOGICAL_WIDTH: f32 = 1920.0;
+const LOGICAL_HEIGHT: f32 = 1080.0;
+
+// Initial window size constants
+const INITIAL_WINDOW_WIDTH: u32 = 1920;
+const INITIAL_WINDOW_HEIGHT: u32 = 1080;
 
 // Sprite helper functions using glam types
 const fn sprite_quad(pos_x: f32, pos_y: f32, size_x: f32, size_y: f32) -> [Vertex; 4] {
@@ -79,7 +83,7 @@ impl Vertex {
     }
 }
 
-// Sprite positioned at (200, 100) with size 99x70 in logical coordinates (matches PNG dimensions)
+// Sprite positioned at (0, 0) with size 99x70 in logical coordinates (matches PNG dimensions)
 const VERTICES: &[Vertex] = &sprite_quad(0.0, 0.0, 99.0, 70.0);
 
 const INDICES: &[u16] = &[0, 1, 2, 2, 3, 0];
@@ -937,7 +941,7 @@ unsafe fn record_command_buffer(
 
     let color_clear_value = vk::ClearValue {
         color: vk::ClearColorValue {
-            float32: [0.0, 0.0, 0.0, 0.0],
+            float32: [0.3, 0.5, 0.7, 1.0], // Blue background for logical area
         },
     };
 
@@ -1616,7 +1620,10 @@ fn main() -> Result<()> {
     let event_loop = EventLoop::new()?;
     let window = WindowBuilder::new()
         .with_title("Ferris Mark VK - Sprite System")
-        .with_inner_size(winit::dpi::LogicalSize::new(800, 600))
+        .with_inner_size(winit::dpi::LogicalSize::new(
+            INITIAL_WINDOW_WIDTH,
+            INITIAL_WINDOW_HEIGHT,
+        ))
         .build(&event_loop)?;
 
     let mut app = unsafe { App::create(&window)? };

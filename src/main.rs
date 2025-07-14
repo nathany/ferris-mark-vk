@@ -260,7 +260,7 @@ impl App {
             pick_physical_device(&instance, &mut data)?;
 
             // Log GPU information after physical device is selected
-            log_gpu_info(&instance, &mut data)?;
+            log_gpu_info(&instance, &mut data);
             let device = create_logical_device(&instance, &mut data)?;
             create_swapchain(window, &instance, &device, &mut data, vsync_enabled)?;
             create_swapchain_image_views(&instance, &device, &mut data)?;
@@ -942,20 +942,6 @@ unsafe fn create_pipeline(_instance: &Instance, device: &Device, data: &mut AppD
             .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
             .primitive_restart_enable(false);
 
-        let viewport = vk::Viewport::builder()
-            .x(0.0)
-            .y(0.0)
-            .width(data.swapchain_extent.width as f32)
-            .height(data.swapchain_extent.height as f32)
-            .min_depth(0.0)
-            .max_depth(1.0);
-
-        let scissor = vk::Rect2D::builder()
-            .offset(vk::Offset2D { x: 0, y: 0 })
-            .extent(data.swapchain_extent);
-
-        let _viewports = &[viewport];
-        let _scissors = &[scissor];
         let viewport_state = vk::PipelineViewportStateCreateInfo::builder()
             .viewport_count(1)
             .scissor_count(1);
@@ -1067,12 +1053,12 @@ unsafe fn create_shader_module(device: &Device, bytecode: &[u8]) -> Result<vk::S
 }
 
 unsafe fn create_command_pool(
-    _instance: &Instance,
+    instance: &Instance,
     device: &Device,
     data: &mut AppData,
 ) -> Result<()> {
     unsafe {
-        let indices = QueueFamilyIndices::get(_instance, data, data.physical_device)?;
+        let indices = QueueFamilyIndices::get(instance, data, data.physical_device)?;
 
         let info = vk::CommandPoolCreateInfo::builder()
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
@@ -1205,7 +1191,7 @@ unsafe fn record_command_buffer(
             vk::ShaderStageFlags::VERTEX,
             0,
             std::slice::from_raw_parts(
-                &push_constants as *const _ as *const u8,
+                (&raw const push_constants).cast::<u8>(),
                 size_of::<PushConstants>(),
             ),
         );
@@ -1253,7 +1239,7 @@ unsafe fn create_texture_image(
     unsafe {
         let img = image::open("ferris.png")?.to_rgba8();
         let (width, height) = (img.width(), img.height());
-        let size = (width * height * 4) as u64;
+        let size = u64::from(width * height * 4);
 
         // Create staging buffer
         let buffer_info = vk::BufferCreateInfo::builder()
@@ -1785,7 +1771,7 @@ fn create_sprite_transform(window_width: f32, window_height: f32) -> [[f32; 4]; 
     transform.to_cols_array_2d()
 }
 
-unsafe fn log_gpu_info(instance: &Instance, data: &mut AppData) -> Result<()> {
+unsafe fn log_gpu_info(instance: &Instance, data: &mut AppData) {
     unsafe {
         if data.physical_device != vk::PhysicalDevice::null() {
             let properties = instance.get_physical_device_properties(data.physical_device);
@@ -1801,7 +1787,6 @@ unsafe fn log_gpu_info(instance: &Instance, data: &mut AppData) -> Result<()> {
                 vk::version_patch(api_version)
             );
         }
-        Ok(())
     }
 }
 

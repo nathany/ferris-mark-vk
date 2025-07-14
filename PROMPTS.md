@@ -645,6 +645,27 @@ FPS: 82.9 | Frame time: 11.99ms | Sprites: 50000 | Sprites/sec: 4146880 | Resolu
 > I wonder if we should entirely remove the VALIDATION_ENABLED and VALIDATION_LAYER stuff from our code and config.toml, and let that be completely controlled by vkconfig?
 > I think we can also remove enabled_layer_names(&layers) in a few places if it's always going to be empty?
 
+---
+
+> Is there any code that we're no longer using? Or any other small cleanups we could do?
+`cargo clippy -- -W clippy::all -W clippy::pedantic -W clippy::nursery`
+
+Code Cleanup Changes Made:
+
+1. **Simplified `log_gpu_info` function**:
+   - Removed unnecessary `Result<()>` return type since it never fails
+   - Removed the `Ok(())` return and `?` call
+
+2. **Removed unused variables**:
+   - Deleted unused `viewport` and `scissor` variables in `create_pipeline`
+   - These weren't needed since we use dynamic viewport/scissor states
+
+3. **Fixed underscore-prefixed variable**:
+   - Removed `_` prefix from `instance` parameter in `create_command_pool` since it's actually used
+
+4. **Improved type conversions**:
+   - Used `u64::from()` instead of `as u64` cast for lossless conversion
+   - Used safer pointer casting with `(&raw const push_constants).cast::<u8>()
 
 ---
 

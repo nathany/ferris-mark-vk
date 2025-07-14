@@ -3,6 +3,7 @@ use bytemuck::{Pod, Zeroable};
 use std::collections::HashSet;
 use std::env;
 use std::mem::size_of;
+use std::time::Instant;
 use vulkanalia::prelude::v1_3::*;
 use vulkanalia::vk::{DeviceV1_4, KhrSurfaceExtension, KhrSwapchainExtension};
 use vulkanalia::{
@@ -21,13 +22,26 @@ const VALIDATION_LAYER: vk::ExtensionName =
 const DEVICE_EXTENSIONS: &[vk::ExtensionName] = &[vk::KHR_SWAPCHAIN_EXTENSION.name];
 const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
-// Logical resolution constants
+// Logical resolution constants (DO NOT CHANGE)
 const LOGICAL_WIDTH: f32 = 1920.0;
 const LOGICAL_HEIGHT: f32 = 1080.0;
 
-// Initial window size constants
+// Initial window size constants (DO NOT CHANGE)
 const INITIAL_WINDOW_WIDTH: u32 = 1920;
 const INITIAL_WINDOW_HEIGHT: u32 = 1080;
+
+// Physics constants
+const GRAVITY: f32 = 0.95;
+const BOUNCE_DAMPING: f32 = 0.85;
+
+// Sprite data for physics simulation
+#[derive(Clone, Debug)]
+struct Sprite {
+    pos_x: f32,
+    pos_y: f32,
+    vel_x: f32,
+    vel_y: f32,
+}
 
 // Sprite helper functions using glam types
 const fn sprite_quad(pos_x: f32, pos_y: f32, size_x: f32, size_y: f32) -> [Vertex; 4] {
@@ -39,20 +53,46 @@ const fn sprite_quad(pos_x: f32, pos_y: f32, size_x: f32, size_y: f32) -> [Verte
     ]
 }
 
-// Generate multiple sprites for testing
-fn generate_sprites(count: usize) -> Vec<Vertex> {
+// Generate sprites with random positions and velocities
+fn generate_sprites(count: usize) -> Vec<Sprite> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut sprites = Vec::new();
+    let sprite_width = 99.0;
+    let sprite_height = 70.0;
+
+    // Simple PRNG based on sprite index
+    for i in 0..count {
+        let mut hasher = DefaultHasher::new();
+        (i as u64).hash(&mut hasher);
+        let seed = hasher.finish();
+
+        // Generate pseudo-random values
+        let rand1 = ((seed.wrapping_mul(16807) % 2147483647) as f32) / 2147483647.0;
+        let rand2 = (((seed >> 16).wrapping_mul(16807) % 2147483647) as f32) / 2147483647.0;
+        let rand3 = (((seed >> 32).wrapping_mul(16807) % 2147483647) as f32) / 2147483647.0;
+        let rand4 = (((seed ^ 0xAAAAAAAA).wrapping_mul(16807) % 2147483647) as f32) / 2147483647.0;
+
+        sprites.push(Sprite {
+            pos_x: rand1 * (LOGICAL_WIDTH - sprite_width),
+            pos_y: rand2 * (LOGICAL_HEIGHT - sprite_height),
+            vel_x: (rand3 - 0.5) * 5.0, // Random velocity between -2.5 and 2.5
+            vel_y: rand4 * 2.5 + 2.5,   // Random upward velocity between 2.5 and 5.0
+        });
+    }
+
+    sprites
+}
+
+// Generate vertices from sprite positions
+fn sprites_to_vertices(sprites: &[Sprite]) -> Vec<Vertex> {
     let mut vertices = Vec::new();
     let sprite_width = 99.0;
     let sprite_height = 70.0;
-    let cols = ((LOGICAL_WIDTH / sprite_width) as usize).max(1);
 
-    for i in 0..count {
-        let col = i % cols;
-        let row = i / cols;
-        let x = col as f32 * (sprite_width + 10.0);
-        let y = row as f32 * (sprite_height + 10.0);
-
-        let quad = sprite_quad(x, y, sprite_width, sprite_height);
+    for sprite in sprites {
+        let quad = sprite_quad(sprite.pos_x, sprite.pos_y, sprite_width, sprite_height);
         vertices.extend_from_slice(&quad);
     }
 
@@ -186,6 +226,8 @@ struct AppData {
     index_buffer: vk::Buffer,
     index_buffer_memory: vk::DeviceMemory,
     sprite_count: usize,
+    sprites: Vec<Sprite>,
+    last_update: Instant,
     texture_image: vk::Image,
     texture_image_memory: vk::DeviceMemory,
     texture_image_view: vk::ImageView,
@@ -239,6 +281,8 @@ impl App {
             in_flight_fences: Vec::new(),
             frame: 0,
             sprite_count,
+            sprites: generate_sprites(sprite_count),
+            last_update: Instant::now(),
         };
         let instance = create_instance(window, &entry, &mut data)?;
         data.surface = vk_window::create_surface(&instance, window, window)?;
@@ -264,6 +308,13 @@ impl App {
     }
 
     unsafe fn render(&mut self, window: &Window) -> Result<()> {
+        // Update sprite physics
+        let now = Instant::now();
+        let dt = now.duration_since(self.data.last_update).as_secs_f32();
+        self.data.last_update = now;
+
+        self.update_sprites(dt);
+
         let window_size = window.inner_size();
         let transform =
             create_sprite_transform(window_size.width as f32, window_size.height as f32);
@@ -344,6 +395,63 @@ impl App {
         }
 
         self.data.frame = (self.data.frame + 1) % MAX_FRAMES_IN_FLIGHT;
+
+        Ok(())
+    }
+
+    fn update_sprites(&mut self, dt: f32) {
+        let sprite_width = 99.0;
+        let sprite_height = 70.0;
+
+        for sprite in &mut self.data.sprites {
+            // Update position
+            sprite.pos_x += sprite.vel_x * dt * 60.0; // Scale by 60 for ~60fps feel
+            sprite.pos_y += sprite.vel_y * dt * 60.0;
+            sprite.vel_y += GRAVITY * dt * 60.0;
+
+            // Handle collisions with screen edges
+            if sprite.pos_x + sprite_width > LOGICAL_WIDTH {
+                sprite.vel_x *= -1.0;
+                sprite.pos_x = LOGICAL_WIDTH - sprite_width;
+            }
+            if sprite.pos_x < 0.0 {
+                sprite.vel_x *= -1.0;
+                sprite.pos_x = 0.0;
+            }
+            if sprite.pos_y + sprite_height > LOGICAL_HEIGHT {
+                sprite.vel_y *= -BOUNCE_DAMPING;
+                sprite.pos_y = LOGICAL_HEIGHT - sprite_height;
+
+                // Add some random bounce variation
+                if sprite.vel_y.abs() < 0.5 {
+                    sprite.vel_y -= 1.0;
+                }
+            }
+            if sprite.pos_y < 0.0 {
+                sprite.vel_y = 0.0;
+                sprite.pos_y = 0.0;
+            }
+        }
+
+        // Update vertex buffer with new positions
+        unsafe {
+            self.update_vertex_buffer().unwrap();
+        }
+    }
+
+    unsafe fn update_vertex_buffer(&mut self) -> Result<()> {
+        let vertices = sprites_to_vertices(&self.data.sprites);
+        let size = (vertices.len() * size_of::<Vertex>()) as u64;
+
+        // Map and update the vertex buffer
+        let memory = self.device.map_memory(
+            self.data.vertex_buffer_memory,
+            0,
+            size,
+            vk::MemoryMapFlags::empty(),
+        )?;
+        std::ptr::copy_nonoverlapping(vertices.as_ptr(), memory.cast(), vertices.len());
+        self.device.unmap_memory(self.data.vertex_buffer_memory);
 
         Ok(())
     }
@@ -1260,9 +1368,9 @@ unsafe fn create_vertex_buffer(
     instance: &Instance,
     device: &Device,
     data: &mut AppData,
-    sprite_count: usize,
+    _sprite_count: usize,
 ) -> Result<()> {
-    let vertices = generate_sprites(sprite_count);
+    let vertices = sprites_to_vertices(&data.sprites);
     let size = (vertices.len() * size_of::<Vertex>()) as u64;
 
     let (staging_buffer, staging_buffer_memory) = create_buffer(
@@ -1284,7 +1392,7 @@ unsafe fn create_vertex_buffer(
         data,
         size,
         vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::VERTEX_BUFFER,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
 
     data.vertex_buffer = vertex_buffer;

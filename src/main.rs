@@ -36,6 +36,10 @@ const INITIAL_WINDOW_HEIGHT: u32 = 1080;
 const GRAVITY: f32 = 0.5;
 const BOUNCE_DAMPING: f32 = 0.90;
 
+// Sprite constants
+const SPRITE_WIDTH: f32 = 99.0;
+const SPRITE_HEIGHT: f32 = 70.0;
+
 // Sprite data for physics simulation
 #[derive(Clone, Debug)]
 struct Sprite {
@@ -49,8 +53,6 @@ fn generate_sprites(count: usize) -> Vec<Sprite> {
     use std::hash::{Hash, Hasher};
 
     let mut sprites = Vec::new();
-    let sprite_width = 99.0;
-    let sprite_height = 70.0;
 
     // Simple PRNG based on sprite index
     for i in 0..count {
@@ -66,8 +68,8 @@ fn generate_sprites(count: usize) -> Vec<Sprite> {
 
         sprites.push(Sprite {
             pos: Vec2::new(
-                rand1 * (LOGICAL_WIDTH - sprite_width),
-                rand2 * (LOGICAL_HEIGHT - sprite_height),
+                rand1 * (LOGICAL_WIDTH - SPRITE_WIDTH),
+                rand2 * (LOGICAL_HEIGHT - SPRITE_HEIGHT),
             ),
             vel: Vec2::new(
                 (rand3 - 0.5) * 10.0, // Random velocity between -5.0 and 5.0
@@ -83,13 +85,11 @@ fn generate_sprites(count: usize) -> Vec<Sprite> {
 impl App {
     fn sprites_to_commands(&self) -> Vec<SpriteCommand> {
         let mut commands = Vec::new();
-        let sprite_width = 99.0;
-        let sprite_height = 70.0;
 
         for sprite in &self.data.sprites {
             // Create transform matrix for sprite position and size
             let transform = Mat4::from_translation(Vec3::new(sprite.pos.x, sprite.pos.y, 0.0))
-                * Mat4::from_scale(Vec3::new(sprite_width, sprite_height, 1.0));
+                * Mat4::from_scale(Vec3::new(SPRITE_WIDTH, SPRITE_HEIGHT, 1.0));
 
             commands.push(SpriteCommand {
                 transform: transform.to_cols_array_2d(),
@@ -436,7 +436,7 @@ impl App {
     }
 
     fn update_sprites(&mut self, dt: f32) {
-        let sprite_size = Vec2::new(99.0, 70.0);
+        let sprite_size = Vec2::new(SPRITE_WIDTH, SPRITE_HEIGHT);
         let logical_bounds = Vec2::new(LOGICAL_WIDTH, LOGICAL_HEIGHT);
         let scaled_dt = dt * 60.0; // Scale by 60 for ~60fps feel
         let gravity = Vec2::new(0.0, GRAVITY * scaled_dt);

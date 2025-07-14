@@ -167,7 +167,8 @@ impl App {
         let result = self.device.acquire_next_image_khr(
             self.data.swapchain,
             u64::MAX,
-            self.data.image_available_semaphores[self.data.frame],
+            self.data.image_available_semaphores
+                [self.data.frame % self.data.image_available_semaphores.len()],
             vk::Fence::null(),
         );
 
@@ -185,10 +186,12 @@ impl App {
 
         record_command_buffer(&self.device, &self.data, command_buffer, image_index)?;
 
-        let wait_semaphores = &[self.data.image_available_semaphores[self.data.frame]];
+        // Use frame-based acquire semaphore but image-based render finished semaphore
+        let wait_semaphores = &[self.data.image_available_semaphores
+            [self.data.frame % self.data.image_available_semaphores.len()]];
         let wait_stages = &[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
         let command_buffers = &[command_buffer];
-        let signal_semaphores = &[self.data.render_finished_semaphores[self.data.frame]];
+        let signal_semaphores = &[self.data.render_finished_semaphores[image_index]];
         let submit_info = vk::SubmitInfo::builder()
             .wait_semaphores(wait_semaphores)
             .wait_dst_stage_mask(wait_stages)
@@ -245,11 +248,16 @@ impl App {
 
         self.destroy_swapchain();
 
-        for i in 0..MAX_FRAMES_IN_FLIGHT {
+        // Destroy semaphores (one per swapchain image)
+        for i in 0..self.data.image_available_semaphores.len() {
             self.device
                 .destroy_semaphore(self.data.image_available_semaphores[i], None);
             self.device
                 .destroy_semaphore(self.data.render_finished_semaphores[i], None);
+        }
+
+        // Destroy fences (one per frame in flight)
+        for i in 0..MAX_FRAMES_IN_FLIGHT {
             self.device
                 .destroy_fence(self.data.in_flight_fences[i], None);
         }
@@ -272,7 +280,7 @@ unsafe fn create_instance(window: &Window, entry: &Entry, _data: &mut AppData) -
         .application_version(vk::make_version(1, 0, 0))
         .engine_name(b"No Engine\0")
         .engine_version(vk::make_version(1, 0, 0))
-        .api_version(vk::make_version(1, 0, 0));
+        .api_version(vk::make_version(1, 4, 0));
 
     let extensions = vk_window::get_required_instance_extensions(window)
         .iter()
@@ -829,11 +837,16 @@ unsafe fn create_sync_objects(
     let semaphore_info = vk::SemaphoreCreateInfo::builder();
     let fence_info = vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED);
 
-    for _ in 0..MAX_FRAMES_IN_FLIGHT {
+    // Create semaphores per swapchain image to avoid reuse issues
+    for _ in 0..data.swapchain_images.len() {
         data.image_available_semaphores
             .push(device.create_semaphore(&semaphore_info, None)?);
         data.render_finished_semaphores
             .push(device.create_semaphore(&semaphore_info, None)?);
+    }
+
+    // Create fences and command buffers per frame in flight
+    for _ in 0..MAX_FRAMES_IN_FLIGHT {
         data.in_flight_fences
             .push(device.create_fence(&fence_info, None)?);
     }

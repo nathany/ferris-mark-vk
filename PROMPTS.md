@@ -127,3 +127,23 @@ Major Issues Encountered
 - **shaderc**: 0.8.3 → 0.9.1 (latest)
 
 ---
+
+> This is a Vulkan triangle rendering app using Vulkanalia which I'd like to modernize.
+Vulkan 1.4 should be available, which I'd like to require. To start, let's also make sure we're using:
+
+> * VkViewport, vkCmdSetViewport
+> * VkRect2D, vkCmdSetScissor
+
+✅ **Vulkan 1.4 Support**
+- Updated the API version to `vk::make_version(1, 4, 0)` in the instance creation
+- While vulkanalia 0.28 doesn't have a v1_4 prelude yet, the app now requests Vulkan 1.4 API version
+
+> * VK_KHR_dynamic_rendering
+> * VK_KHR_synchronization2
+> * VK_KHR_maintenance*
+
+✅ **Fixed Validation Layer Errors**
+The major issue was with semaphore synchronization. I implemented a proper solution:
+- **Per-swapchain-image semaphores**: Created separate `image_available_semaphores` and `render_finished_semaphores` for each swapchain image (typically 3) instead of per frame in flight (2)
+- **Proper indexing**: Used frame-based indexing for acquire semaphores but image-based indexing for render finished semaphores
+- **Fixed cleanup**: Updated the destroy function to properly clean up all created semaphores

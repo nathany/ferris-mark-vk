@@ -418,6 +418,57 @@ Issues Encountered & Solutions:
 
 ---
 
+> Please correct all clippy warnings and have a look at the best practices mentioned in the validation layers (which I just re-enabled).
+
+> I'm not sure how far I want to go down the GPU-driven command, because I'm concerned about how difficult it may be to debug. Maybe we can take another look at the plan.
+
+Validation Layer Best Practices Issues:
+
+1. **Small memory allocations** - We're making many small allocations instead of sub-allocating from larger blocks
+2. **Command pool flags** - Recommendation about pool resets
+3. **Pipeline layout size** - The layout is too large (likely the buffer device address in push constants)
+
+Current State - Phase 1 Complete ✅**
+- **Procedural vertex generation** (easier to debug than complex buffer layouts)
+- **Instanced rendering** (one draw call, but still CPU-controlled)
+- **Standard descriptor sets** (debugger-friendly, shows up in graphics debuggers)
+- **~120-140 FPS** with 1000 sprites
+
+### **Recommended Next Steps - Debugger-Friendly Focus:**
+
+#### **Phase 2A: Memory Management Optimization**
+**Goal**: Address validation layer warnings while keeping debugging simple
+- **Implement memory allocator** (VMA or custom) for sub-allocation
+- **Combine small allocations** into larger blocks
+- **Fix command pool flags** for better performance
+
+#### **Phase 2B: CPU-Side Optimizations**
+**Goal**: Optimize the CPU side while keeping GPU side simple
+- **Frustum culling** on CPU (easy to debug, step through in debugger)
+- **Sort sprites by depth/texture** for better cache performance
+- **SIMD optimizations** for physics updates (explicit, debuggable)
+
+#### **Phase 2C: Smart Batching**
+**Goal**: Better batching without losing debuggability
+- **Texture atlas support** (multiple sprites, one texture)
+- **State sorting** (group by blend mode, shader variants)
+- **Debug visualization** for batch boundaries
+
+### **Alternative to GPU-Driven Commands:**
+Instead of full GPU-driven rendering, consider:
+
+1. **Hybrid approach**: CPU prepares commands, GPU consumes them (current approach)
+2. **Debug modes**: Toggle between optimized and debug-friendly paths
+3. **Validation integration**: Use validation layers for performance insights
+4. **Graphics debugger friendly**: Standard descriptor sets, named resources
+
+### **Phase 3+: Advanced (Optional)**
+- **Bindless textures** (when you need multiple textures)
+- **Compute-based culling** (optional, togglable)
+- **Mesh shaders** (very advanced, R&D territory)
+
+---
+
 ## Maybe Later
 
 * VK_EXT_debug_utils in debug releases to give names to objects ?

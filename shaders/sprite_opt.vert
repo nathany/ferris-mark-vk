@@ -1,5 +1,4 @@
 #version 460
-#extension GL_EXT_buffer_reference : require
 
 struct SpriteCommand {
     mat4 transform;
@@ -8,13 +7,12 @@ struct SpriteCommand {
     vec2 uvMax;
 };
 
-layout(buffer_reference, std430) readonly buffer SpriteBuffer {
+layout(set = 0, binding = 1, std430) readonly buffer SpriteBuffer {
     SpriteCommand commands[];
-};
+} spriteBuffer;
 
 layout(push_constant) uniform PushConstants {
     mat4 viewProj;
-    SpriteBuffer spriteBuffer;
 } pc;
 
 layout(location = 0) out vec2 fragTexCoord;
@@ -36,7 +34,7 @@ void main() {
     vec2 baseCoord = vertices[gl_VertexIndex];
 
     // Get sprite command for this instance
-    SpriteCommand cmd = pc.spriteBuffer.commands[gl_InstanceIndex];
+    SpriteCommand cmd = spriteBuffer.commands[gl_InstanceIndex];
 
     // Transform vertex position
     gl_Position = pc.viewProj * cmd.transform * vec4(baseCoord, 0.0, 1.0);

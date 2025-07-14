@@ -6,7 +6,7 @@ use std::env;
 use std::mem::size_of;
 use std::time::Instant;
 use vulkanalia::prelude::v1_3::*;
-use vulkanalia::vk::{DeviceV1_4, KhrSurfaceExtension, KhrSwapchainExtension};
+use vulkanalia::vk::{KhrSurfaceExtension, KhrSwapchainExtension};
 use vulkanalia::{
     loader::{LibloadingLoader, LIBRARY},
     window as vk_window, Device, Entry, Instance,
@@ -42,16 +42,6 @@ struct Sprite {
     pos_y: f32,
     vel_x: f32,
     vel_y: f32,
-}
-
-// Sprite helper functions using glam types
-const fn sprite_quad(pos_x: f32, pos_y: f32, size_x: f32, size_y: f32) -> [Vertex; 4] {
-    [
-        Vertex::new([pos_x, pos_y], [0.0, 0.0]),
-        Vertex::new([pos_x + size_x, pos_y], [1.0, 0.0]),
-        Vertex::new([pos_x + size_x, pos_y + size_y], [1.0, 1.0]),
-        Vertex::new([pos_x, pos_y + size_y], [0.0, 1.0]),
-    ]
 }
 
 // Generate sprites with random positions and velocities
@@ -112,13 +102,6 @@ impl App {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
-struct Vertex {
-    pos: [f32; 2],
-    tex_coord: [f32; 2],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct SpriteCommand {
     transform: [[f32; 4]; 4], // Mat4 as array for bytemuck compatibility
     color: [f32; 4],
@@ -130,42 +113,7 @@ struct SpriteCommand {
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct PushConstants {
     view_proj: [[f32; 4]; 4], // Mat4 as array for bytemuck compatibility
-    sprite_buffer_address: u64,
 }
-
-impl Vertex {
-    const fn new(pos: [f32; 2], tex_coord: [f32; 2]) -> Self {
-        Self { pos, tex_coord }
-    }
-
-    fn binding_description() -> vk::VertexInputBindingDescription {
-        vk::VertexInputBindingDescription::builder()
-            .binding(0)
-            .stride(std::mem::size_of::<Vertex>() as u32)
-            .input_rate(vk::VertexInputRate::VERTEX)
-            .build()
-    }
-
-    fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 2] {
-        [
-            vk::VertexInputAttributeDescription::builder()
-                .binding(0)
-                .location(0)
-                .format(vk::Format::R32G32_SFLOAT)
-                .offset(0)
-                .build(),
-            vk::VertexInputAttributeDescription::builder()
-                .binding(0)
-                .location(1)
-                .format(vk::Format::R32G32_SFLOAT)
-                .offset(std::mem::size_of::<[f32; 2]>() as u32)
-                .build(),
-        ]
-    }
-}
-
-// Indices for a single quad (will be reused for multiple sprites)
-const QUAD_INDICES: &[u16] = &[0, 1, 2, 2, 3, 0];
 
 #[derive(Clone, Debug)]
 struct QueueFamilyIndices {
@@ -244,7 +192,8 @@ struct AppData {
     pipeline: vk::Pipeline,
     sprite_command_buffer: vk::Buffer,
     sprite_command_buffer_memory: vk::DeviceMemory,
-    sprite_command_buffer_address: u64,
+    descriptor_set: vk::DescriptorSet,
+    descriptor_pool: vk::DescriptorPool,
     sprite_count: usize,
     sprites: Vec<Sprite>,
     last_update: Instant,
@@ -292,7 +241,8 @@ impl App {
             pipeline: vk::Pipeline::null(),
             sprite_command_buffer: vk::Buffer::null(),
             sprite_command_buffer_memory: vk::DeviceMemory::null(),
-            sprite_command_buffer_address: 0,
+            descriptor_set: vk::DescriptorSet::null(),
+            descriptor_pool: vk::DescriptorPool::null(),
             texture_image: vk::Image::null(),
             texture_image_memory: vk::DeviceMemory::null(),
             texture_image_view: vk::ImageView::null(),
@@ -328,6 +278,7 @@ impl App {
         create_texture_sampler(&instance, &device, &mut data)?;
         create_sprite_command_buffer(&instance, &device, &mut data, sprite_count)?;
         create_pipeline(&instance, &device, &mut data)?;
+        create_descriptor_sets(&instance, &device, &mut data)?;
         create_command_buffers(&instance, &device, &mut data)?;
         create_sync_objects(&instance, &device, &mut data)?;
         Ok(Self {
@@ -589,6 +540,10 @@ impl App {
             .free_memory(self.data.texture_image_memory, None);
 
         // Destroy buffer resources
+        // Destroy descriptor resources
+        self.device
+            .destroy_descriptor_pool(self.data.descriptor_pool, None);
+
         // Destroy buffers
         self.device
             .destroy_buffer(self.data.sprite_command_buffer, None);
@@ -1045,17 +1000,23 @@ unsafe fn create_pipeline(_instance: &Instance, device: &Device, data: &mut AppD
     let dynamic_state =
         vk::PipelineDynamicStateCreateInfo::builder().dynamic_states(dynamic_states);
 
-    // Create descriptor set layout for push descriptors
-    let bindings = &[vk::DescriptorSetLayoutBinding::builder()
-        .binding(0)
-        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-        .descriptor_count(1)
-        .stage_flags(vk::ShaderStageFlags::FRAGMENT)
-        .build()];
+    // Create descriptor set layout for texture and sprite buffer
+    let bindings = &[
+        vk::DescriptorSetLayoutBinding::builder()
+            .binding(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT)
+            .build(),
+        vk::DescriptorSetLayoutBinding::builder()
+            .binding(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::VERTEX)
+            .build(),
+    ];
 
-    let layout_info = vk::DescriptorSetLayoutCreateInfo::builder()
-        .flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR)
-        .bindings(bindings);
+    let layout_info = vk::DescriptorSetLayoutCreateInfo::builder().bindings(bindings);
 
     data.descriptor_set_layout = device.create_descriptor_set_layout(&layout_info, None)?;
 
@@ -1220,30 +1181,20 @@ unsafe fn record_command_buffer(
 
     device.cmd_set_scissor(command_buffer, 0, &[scissor]);
 
-    // Push descriptor for texture
-    let image_info = vk::DescriptorImageInfo::builder()
-        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-        .image_view(data.texture_image_view)
-        .sampler(data.texture_sampler);
-
-    let descriptor_write = vk::WriteDescriptorSet::builder()
-        .dst_binding(0)
-        .dst_array_element(0)
-        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-        .image_info(std::slice::from_ref(&image_info));
-
-    device.cmd_push_descriptor_set(
+    // Bind descriptor set with texture and sprite buffer
+    let descriptor_sets = &[data.descriptor_set];
+    device.cmd_bind_descriptor_sets(
         command_buffer,
         vk::PipelineBindPoint::GRAPHICS,
         data.pipeline_layout,
         0,
-        std::slice::from_ref(&descriptor_write),
+        descriptor_sets,
+        &[],
     );
 
-    // Push constants with view-projection matrix and sprite buffer address
+    // Push constants with view-projection matrix only
     let push_constants = PushConstants {
         view_proj: *view_proj,
-        sprite_buffer_address: data.sprite_command_buffer_address,
     };
     device.cmd_push_constants(
         command_buffer,
@@ -1452,19 +1403,12 @@ unsafe fn create_sprite_command_buffer(
         device,
         data,
         size,
-        vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+        vk::BufferUsageFlags::STORAGE_BUFFER,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )?;
 
     data.sprite_command_buffer = sprite_command_buffer;
     data.sprite_command_buffer_memory = sprite_command_buffer_memory;
-
-    // Get buffer device address
-    let buffer_device_address_info =
-        vk::BufferDeviceAddressInfo::builder().buffer(sprite_command_buffer);
-
-    data.sprite_command_buffer_address =
-        device.get_buffer_device_address(&buffer_device_address_info);
 
     Ok(())
 }
@@ -1519,41 +1463,66 @@ unsafe fn get_memory_type(
         .ok_or_else(|| anyhow!("Failed to find suitable memory type."))
 }
 
-unsafe fn copy_buffer(
+unsafe fn create_descriptor_sets(
+    _instance: &Instance,
     device: &Device,
-    data: &AppData,
-    src_buffer: vk::Buffer,
-    dst_buffer: vk::Buffer,
-    size: u64,
+    data: &mut AppData,
 ) -> Result<()> {
-    let alloc_info = vk::CommandBufferAllocateInfo::builder()
-        .level(vk::CommandBufferLevel::PRIMARY)
-        .command_pool(data.command_pool)
-        .command_buffer_count(1);
+    // Create descriptor pool
+    let pool_sizes = &[
+        vk::DescriptorPoolSize::builder()
+            .type_(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_count(1)
+            .build(),
+        vk::DescriptorPoolSize::builder()
+            .type_(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count(1)
+            .build(),
+    ];
 
-    let command_buffer = device.allocate_command_buffers(&alloc_info)?[0];
+    let pool_info = vk::DescriptorPoolCreateInfo::builder()
+        .pool_sizes(pool_sizes)
+        .max_sets(1);
 
-    let info =
-        vk::CommandBufferBeginInfo::builder().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+    data.descriptor_pool = device.create_descriptor_pool(&pool_info, None)?;
 
-    device.begin_command_buffer(command_buffer, &info)?;
+    // Allocate descriptor set
+    let layouts = &[data.descriptor_set_layout];
+    let alloc_info = vk::DescriptorSetAllocateInfo::builder()
+        .descriptor_pool(data.descriptor_pool)
+        .set_layouts(layouts);
 
-    let regions = vk::BufferCopy::builder()
-        .src_offset(0)
-        .dst_offset(0)
-        .size(size);
+    data.descriptor_set = device.allocate_descriptor_sets(&alloc_info)?[0];
 
-    device.cmd_copy_buffer(command_buffer, src_buffer, dst_buffer, &[regions]);
+    // Update descriptor set
+    let image_info = vk::DescriptorImageInfo::builder()
+        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+        .image_view(data.texture_image_view)
+        .sampler(data.texture_sampler);
 
-    device.end_command_buffer(command_buffer)?;
+    let buffer_info = vk::DescriptorBufferInfo::builder()
+        .buffer(data.sprite_command_buffer)
+        .offset(0)
+        .range(vk::WHOLE_SIZE as u64);
 
-    let command_buffers = &[command_buffer];
-    let info = vk::SubmitInfo::builder().command_buffers(command_buffers);
+    let descriptor_writes = &[
+        vk::WriteDescriptorSet::builder()
+            .dst_set(data.descriptor_set)
+            .dst_binding(0)
+            .dst_array_element(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(std::slice::from_ref(&image_info))
+            .build(),
+        vk::WriteDescriptorSet::builder()
+            .dst_set(data.descriptor_set)
+            .dst_binding(1)
+            .dst_array_element(0)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .buffer_info(std::slice::from_ref(&buffer_info))
+            .build(),
+    ];
 
-    device.queue_submit(data.graphics_queue, &[info], vk::Fence::null())?;
-    device.queue_wait_idle(data.graphics_queue)?;
-
-    device.free_command_buffers(data.command_pool, &[command_buffer]);
+    device.update_descriptor_sets(descriptor_writes, &[] as &[vk::CopyDescriptorSet]);
 
     Ok(())
 }

@@ -1,6 +1,0 @@
-# Validation layers are now controlled entirely by vkconfig (Vulkan Configurator)
-# This provides more flexibility for development and testing
-
-[build]
-# Optional: Use different optimization levels for debug builds
-# opt-level = 1  # Uncomment if you want some optimization in debug builds

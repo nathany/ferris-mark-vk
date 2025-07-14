@@ -893,35 +893,105 @@ unsafe fn create_swapchain_image_views(
 }
 
 unsafe fn create_pipeline(_instance: &Instance, device: &Device, data: &mut AppData) -> Result<()> {
+    // SAFE: Compiler creation and file I/O
+    let compiler = shaderc::Compiler::new().unwrap();
+    let vert_shader_source = std::fs::read_to_string("shaders/sprite.vert")?;
+    let frag_shader_source = std::fs::read_to_string("shaders/sprite.frag")?;
+
+    // SAFE: Shader compilation
+    let vert_compiled = compiler
+        .compile_into_spirv(
+            &vert_shader_source,
+            shaderc::ShaderKind::Vertex,
+            "sprite.vert",
+            "main",
+            None,
+        )
+        .map_err(|e| anyhow!("Failed to compile vertex shader: {}", e))?;
+
+    let frag_compiled = compiler
+        .compile_into_spirv(
+            &frag_shader_source,
+            shaderc::ShaderKind::Fragment,
+            "sprite.frag",
+            "main",
+            None,
+        )
+        .map_err(|e| anyhow!("Failed to compile fragment shader: {}", e))?;
+
+    let vert_shader_code = vert_compiled.as_binary_u8();
+    let frag_shader_code = frag_compiled.as_binary_u8();
+
+    // SAFE: Builder patterns for pipeline state
+    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder();
+
+    let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo::builder()
+        .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+        .primitive_restart_enable(false);
+
+    let viewport_state = vk::PipelineViewportStateCreateInfo::builder()
+        .viewport_count(1)
+        .scissor_count(1);
+
+    let rasterization_state = vk::PipelineRasterizationStateCreateInfo::builder()
+        .depth_clamp_enable(false)
+        .rasterizer_discard_enable(false)
+        .polygon_mode(vk::PolygonMode::FILL)
+        .line_width(1.0)
+        .cull_mode(vk::CullModeFlags::BACK)
+        .front_face(vk::FrontFace::CLOCKWISE)
+        .depth_bias_enable(false);
+
+    let multisample_state = vk::PipelineMultisampleStateCreateInfo::builder()
+        .sample_shading_enable(false)
+        .rasterization_samples(vk::SampleCountFlags::_1);
+
+    let attachment = vk::PipelineColorBlendAttachmentState::builder()
+        .color_write_mask(vk::ColorComponentFlags::all())
+        .blend_enable(true)
+        .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+        .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+        .color_blend_op(vk::BlendOp::ADD)
+        .src_alpha_blend_factor(vk::BlendFactor::ONE)
+        .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
+        .alpha_blend_op(vk::BlendOp::ADD);
+
+    let attachments = &[attachment];
+    let color_blend_state = vk::PipelineColorBlendStateCreateInfo::builder()
+        .logic_op_enable(false)
+        .logic_op(vk::LogicOp::COPY)
+        .attachments(attachments)
+        .blend_constants([0.0, 0.0, 0.0, 0.0]);
+
+    let dynamic_states = &[vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+    let dynamic_state =
+        vk::PipelineDynamicStateCreateInfo::builder().dynamic_states(dynamic_states);
+
+    let bindings = &[
+        vk::DescriptorSetLayoutBinding::builder()
+            .binding(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT)
+            .build(),
+        vk::DescriptorSetLayoutBinding::builder()
+            .binding(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::VERTEX)
+            .build(),
+    ];
+
+    let descriptor_layout_info = vk::DescriptorSetLayoutCreateInfo::builder().bindings(bindings);
+
+    let push_constant_ranges = &[vk::PushConstantRange::builder()
+        .stage_flags(vk::ShaderStageFlags::VERTEX)
+        .offset(0)
+        .size(size_of::<PushConstants>() as u32)
+        .build()];
+
     unsafe {
-        let compiler = shaderc::Compiler::new().unwrap();
-
-        let vert_shader_source = std::fs::read_to_string("shaders/sprite.vert")?;
-        let frag_shader_source = std::fs::read_to_string("shaders/sprite.frag")?;
-
-        let vert_compiled = compiler
-            .compile_into_spirv(
-                &vert_shader_source,
-                shaderc::ShaderKind::Vertex,
-                "sprite.vert",
-                "main",
-                None,
-            )
-            .map_err(|e| anyhow!("Failed to compile vertex shader: {}", e))?;
-
-        let frag_compiled = compiler
-            .compile_into_spirv(
-                &frag_shader_source,
-                shaderc::ShaderKind::Fragment,
-                "sprite.frag",
-                "main",
-                None,
-            )
-            .map_err(|e| anyhow!("Failed to compile fragment shader: {}", e))?;
-
-        let vert_shader_code = vert_compiled.as_binary_u8();
-        let frag_shader_code = frag_compiled.as_binary_u8();
-
+        // UNSAFE: Vulkan API calls
         let vert_shader_module = create_shader_module(device, vert_shader_code)?;
         let frag_shader_module = create_shader_module(device, frag_shader_code)?;
 
@@ -935,82 +1005,14 @@ unsafe fn create_pipeline(_instance: &Instance, device: &Device, data: &mut AppD
             .module(frag_shader_module)
             .name(b"main\0");
 
-        // No vertex input needed - vertices are generated procedurally in shader
-        let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder();
-
-        let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo::builder()
-            .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
-            .primitive_restart_enable(false);
-
-        let viewport_state = vk::PipelineViewportStateCreateInfo::builder()
-            .viewport_count(1)
-            .scissor_count(1);
-
-        let rasterization_state = vk::PipelineRasterizationStateCreateInfo::builder()
-            .depth_clamp_enable(false)
-            .rasterizer_discard_enable(false)
-            .polygon_mode(vk::PolygonMode::FILL)
-            .line_width(1.0)
-            .cull_mode(vk::CullModeFlags::BACK)
-            .front_face(vk::FrontFace::CLOCKWISE)
-            .depth_bias_enable(false);
-
-        let multisample_state = vk::PipelineMultisampleStateCreateInfo::builder()
-            .sample_shading_enable(false)
-            .rasterization_samples(vk::SampleCountFlags::_1);
-
-        let attachment = vk::PipelineColorBlendAttachmentState::builder()
-            .color_write_mask(vk::ColorComponentFlags::all())
-            .blend_enable(true)
-            .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
-            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-            .color_blend_op(vk::BlendOp::ADD)
-            .src_alpha_blend_factor(vk::BlendFactor::ONE)
-            .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
-            .alpha_blend_op(vk::BlendOp::ADD);
-
-        let attachments = &[attachment];
-        let color_blend_state = vk::PipelineColorBlendStateCreateInfo::builder()
-            .logic_op_enable(false)
-            .logic_op(vk::LogicOp::COPY)
-            .attachments(attachments)
-            .blend_constants([0.0, 0.0, 0.0, 0.0]);
-
-        let dynamic_states = &[vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-        let dynamic_state =
-            vk::PipelineDynamicStateCreateInfo::builder().dynamic_states(dynamic_states);
-
-        // Create descriptor set layout for texture and sprite buffer
-        let bindings = &[
-            vk::DescriptorSetLayoutBinding::builder()
-                .binding(0)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::FRAGMENT)
-                .build(),
-            vk::DescriptorSetLayoutBinding::builder()
-                .binding(1)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::VERTEX)
-                .build(),
-        ];
-
-        let layout_info = vk::DescriptorSetLayoutCreateInfo::builder().bindings(bindings);
-
-        data.descriptor_set_layout = device.create_descriptor_set_layout(&layout_info, None)?;
+        data.descriptor_set_layout =
+            device.create_descriptor_set_layout(&descriptor_layout_info, None)?;
 
         let set_layouts = &[data.descriptor_set_layout];
-        let push_constant_ranges = &[vk::PushConstantRange::builder()
-            .stage_flags(vk::ShaderStageFlags::VERTEX)
-            .offset(0)
-            .size(size_of::<PushConstants>() as u32)
-            .build()];
-
-        let layout_info = vk::PipelineLayoutCreateInfo::builder()
+        let pipeline_layout_info = vk::PipelineLayoutCreateInfo::builder()
             .set_layouts(set_layouts)
             .push_constant_ranges(push_constant_ranges);
-        data.pipeline_layout = device.create_pipeline_layout(&layout_info, None)?;
+        data.pipeline_layout = device.create_pipeline_layout(&pipeline_layout_info, None)?;
 
         let stages = &[vert_stage, frag_stage];
         let color_attachment_formats = &[data.swapchain_format];

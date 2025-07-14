@@ -669,6 +669,10 @@ Code Cleanup Changes Made:
 
 ---
 
+> This may be a tricky one that will take some thought. Please make a list of functions that have unsafe blocks spanning the entire function and also determine which calls (e.g. to vulkanalia) need to be wrapped in unsafe blocks. From that, make a plan for which unsafe blocks could be narrowed or split such that more lines of code are considered safe.
+
+> Let's proceed with phase 1. Keep readability in mind. It may be better to have a few lines in an unsafe block that don't need to be if the code is more concise. But any large blocks of safe code should be outside of unsafe blocks if possible. Given the magnitude of these changes, it may be a good idea to tackle 1 function first and ensure everything compiles and works before moving on.
+
 
 
 ## Maybe Later

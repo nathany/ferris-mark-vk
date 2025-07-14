@@ -17,10 +17,6 @@ use winit::event::{Event, WindowEvent};
 use winit::event_loop::EventLoop;
 use winit::window::{Window, WindowBuilder};
 
-const VALIDATION_ENABLED: bool = cfg!(debug_assertions);
-const VALIDATION_LAYER: vk::ExtensionName =
-    vk::ExtensionName::from_bytes(b"VK_LAYER_KHRONOS_validation");
-
 const DEVICE_EXTENSIONS: &[vk::ExtensionName] = &[vk::KHR_SWAPCHAIN_EXTENSION.name];
 const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
@@ -589,37 +585,13 @@ unsafe fn create_instance(window: &Window, entry: &Entry, _data: &mut AppData) -
             .map(|e| e.as_ptr())
             .collect::<Vec<_>>();
 
-        let mut layers = Vec::new();
-        let validation_disabled = std::env::var("VK_DISABLE_VALIDATION").is_ok();
-        if VALIDATION_ENABLED && !validation_disabled {
-            check_validation_layer_support(entry)?;
-            layers.push(VALIDATION_LAYER.as_ptr());
-        }
-
         let info = vk::InstanceCreateInfo::builder()
             .application_info(&application_info)
-            .enabled_layer_names(&layers)
             .enabled_extension_names(&extensions);
 
         let instance = entry.create_instance(&info, None)?;
 
         Ok(instance)
-    }
-}
-
-unsafe fn check_validation_layer_support(entry: &Entry) -> Result<()> {
-    unsafe {
-        let available_layers = entry
-            .enumerate_instance_layer_properties()?
-            .iter()
-            .map(|l| l.layer_name)
-            .collect::<HashSet<_>>();
-
-        if available_layers.contains(&VALIDATION_LAYER) {
-            Ok(())
-        } else {
-            Err(anyhow!("Validation layer requested but not supported."))
-        }
     }
 }
 
@@ -722,13 +694,6 @@ unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Resu
             })
             .collect::<Vec<_>>();
 
-        let validation_disabled = std::env::var("VK_DISABLE_VALIDATION").is_ok();
-        let layers = if VALIDATION_ENABLED && !validation_disabled {
-            vec![VALIDATION_LAYER.as_ptr()]
-        } else {
-            vec![]
-        };
-
         let extensions = DEVICE_EXTENSIONS
             .iter()
             .map(|n| n.as_ptr())
@@ -767,7 +732,6 @@ unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Resu
 
         let info = vk::DeviceCreateInfo::builder()
             .queue_create_infos(&queue_infos)
-            .enabled_layer_names(&layers)
             .enabled_extension_names(&extensions)
             .enabled_features(&features)
             .push_next(&mut sync2_features)
@@ -1863,14 +1827,6 @@ fn main() -> Result<()> {
         "VSync: {}",
         if vsync_enabled { "Enabled" } else { "Disabled" }
     );
-    let validation_status = if std::env::var("VK_DISABLE_VALIDATION").is_ok() {
-        "Force disabled by VK_DISABLE_VALIDATION"
-    } else if VALIDATION_ENABLED {
-        "Requested by app (vkconfig may override)"
-    } else {
-        "Not requested by app (vkconfig may override)"
-    };
-    println!("Validation layers: {validation_status}");
     println!("Performance metrics will be logged every second...\n");
 
     let event_loop = EventLoop::new()?;

@@ -636,9 +636,15 @@ FPS: 82.9 | Frame time: 11.99ms | Sprites: 50000 | Sprites/sec: 4146880 | Resolu
 
 ---
 
+## Code review
+
 > Please add constants for sprite_width and sprite_height.
 
 > Please use the fastrand crate instead of generating our own pseudo-random values.
+
+> I wonder if we should entirely remove the VALIDATION_ENABLED and VALIDATION_LAYER stuff from our code and config.toml, and let that be completely controlled by vkconfig?
+> I think we can also remove enabled_layer_names(&layers) in a few places if it's always going to be empty?
+
 
 ---
 

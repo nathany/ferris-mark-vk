@@ -17,10 +17,7 @@ const VALIDATION_ENABLED: bool = false;
 const VALIDATION_LAYER: vk::ExtensionName =
     vk::ExtensionName::from_bytes(b"VK_LAYER_KHRONOS_validation");
 
-const DEVICE_EXTENSIONS: &[vk::ExtensionName] = &[
-    vk::KHR_SWAPCHAIN_EXTENSION.name,
-    vk::KHR_SYNCHRONIZATION2_EXTENSION.name,
-];
+const DEVICE_EXTENSIONS: &[vk::ExtensionName] = &[vk::KHR_SWAPCHAIN_EXTENSION.name];
 const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
 #[derive(Clone, Debug)]

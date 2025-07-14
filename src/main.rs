@@ -93,10 +93,8 @@ struct AppData {
     swapchain: vk::SwapchainKHR,
     swapchain_images: Vec<vk::Image>,
     swapchain_image_views: Vec<vk::ImageView>,
-    render_pass: vk::RenderPass,
     pipeline_layout: vk::PipelineLayout,
     pipeline: vk::Pipeline,
-    framebuffers: Vec<vk::Framebuffer>,
     command_pool: vk::CommandPool,
     command_buffers: Vec<vk::CommandBuffer>,
     image_available_semaphores: Vec<vk::Semaphore>,
@@ -127,10 +125,8 @@ impl App {
             swapchain: vk::SwapchainKHR::null(),
             swapchain_images: Vec::new(),
             swapchain_image_views: Vec::new(),
-            render_pass: vk::RenderPass::null(),
             pipeline_layout: vk::PipelineLayout::null(),
             pipeline: vk::Pipeline::null(),
-            framebuffers: Vec::new(),
             command_pool: vk::CommandPool::null(),
             command_buffers: Vec::new(),
             image_available_semaphores: Vec::new(),
@@ -144,9 +140,7 @@ impl App {
         let device = create_logical_device(&instance, &mut data)?;
         create_swapchain(window, &instance, &device, &mut data)?;
         create_swapchain_image_views(&instance, &device, &mut data)?;
-        create_render_pass(&instance, &device, &mut data)?;
         create_pipeline(&instance, &device, &mut data)?;
-        create_framebuffers(&instance, &device, &mut data)?;
         create_command_pool(&instance, &device, &mut data)?;
         create_command_buffers(&instance, &device, &mut data)?;
         create_sync_objects(&instance, &device, &mut data)?;
@@ -238,17 +232,14 @@ impl App {
         self.destroy_swapchain();
         create_swapchain(window, &self.instance, &self.device, &mut self.data)?;
         create_swapchain_image_views(&self.instance, &self.device, &mut self.data)?;
-        create_framebuffers(&self.instance, &self.device, &mut self.data)?;
         Ok(())
     }
 
     unsafe fn destroy_swapchain(&mut self) {
-        for framebuffer in &self.data.framebuffers {
-            self.device.destroy_framebuffer(*framebuffer, None);
-        }
         for image_view in &self.data.swapchain_image_views {
             self.device.destroy_image_view(*image_view, None);
         }
+        self.data.swapchain_image_views.clear();
         self.device.destroy_swapchain_khr(self.data.swapchain, None);
     }
 
@@ -276,7 +267,6 @@ impl App {
         self.device.destroy_pipeline(self.data.pipeline, None);
         self.device
             .destroy_pipeline_layout(self.data.pipeline_layout, None);
-        self.device.destroy_render_pass(self.data.render_pass, None);
         self.device.destroy_device(None);
         self.instance.destroy_surface_khr(self.data.surface, None);
         self.instance.destroy_instance(None);
@@ -464,6 +454,9 @@ unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Resu
     let mut sync2_features =
         vk::PhysicalDeviceSynchronization2Features::builder().synchronization2(true);
 
+    let mut dynamic_rendering_features =
+        vk::PhysicalDeviceDynamicRenderingFeatures::builder().dynamic_rendering(true);
+
     let features = vk::PhysicalDeviceFeatures::builder();
 
     let info = vk::DeviceCreateInfo::builder()
@@ -471,7 +464,8 @@ unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Resu
         .enabled_layer_names(&layers)
         .enabled_extension_names(&extensions)
         .enabled_features(&features)
-        .push_next(&mut sync2_features);
+        .push_next(&mut sync2_features)
+        .push_next(&mut dynamic_rendering_features);
 
     let device = instance.create_device(data.physical_device, &info, None)?;
 
@@ -604,51 +598,6 @@ unsafe fn create_swapchain_image_views(
     Ok(())
 }
 
-unsafe fn create_render_pass(
-    _instance: &Instance,
-    device: &Device,
-    data: &mut AppData,
-) -> Result<()> {
-    let color_attachment = vk::AttachmentDescription::builder()
-        .format(data.swapchain_format)
-        .samples(vk::SampleCountFlags::_1)
-        .load_op(vk::AttachmentLoadOp::CLEAR)
-        .store_op(vk::AttachmentStoreOp::STORE)
-        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-        .initial_layout(vk::ImageLayout::UNDEFINED)
-        .final_layout(vk::ImageLayout::PRESENT_SRC_KHR);
-
-    let color_attachment_ref = vk::AttachmentReference::builder()
-        .attachment(0)
-        .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
-
-    let color_attachments = &[color_attachment_ref];
-    let subpass = vk::SubpassDescription::builder()
-        .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-        .color_attachments(color_attachments);
-
-    let dependency = vk::SubpassDependency::builder()
-        .src_subpass(vk::SUBPASS_EXTERNAL)
-        .dst_subpass(0)
-        .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-        .src_access_mask(vk::AccessFlags::empty())
-        .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-        .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE);
-
-    let attachments = &[color_attachment];
-    let subpasses = &[subpass];
-    let dependencies = &[dependency];
-    let info = vk::RenderPassCreateInfo::builder()
-        .attachments(attachments)
-        .subpasses(subpasses)
-        .dependencies(dependencies);
-
-    data.render_pass = device.create_render_pass(&info, None)?;
-
-    Ok(())
-}
-
 unsafe fn create_pipeline(_instance: &Instance, device: &Device, data: &mut AppData) -> Result<()> {
     let compiler = shaderc::Compiler::new().unwrap();
 
@@ -753,6 +702,10 @@ unsafe fn create_pipeline(_instance: &Instance, device: &Device, data: &mut AppD
     data.pipeline_layout = device.create_pipeline_layout(&layout_info, None)?;
 
     let stages = &[vert_stage, frag_stage];
+    let color_attachment_formats = &[data.swapchain_format];
+    let mut pipeline_rendering_create_info = vk::PipelineRenderingCreateInfo::builder()
+        .color_attachment_formats(color_attachment_formats);
+
     let info = vk::GraphicsPipelineCreateInfo::builder()
         .stages(stages)
         .vertex_input_state(&vertex_input_state)
@@ -763,8 +716,7 @@ unsafe fn create_pipeline(_instance: &Instance, device: &Device, data: &mut AppD
         .color_blend_state(&color_blend_state)
         .dynamic_state(&dynamic_state)
         .layout(data.pipeline_layout)
-        .render_pass(data.render_pass)
-        .subpass(0);
+        .push_next(&mut pipeline_rendering_create_info);
 
     let pipelines = device.create_graphics_pipelines(vk::PipelineCache::null(), &[info], None)?;
     data.pipeline = pipelines.0[0];
@@ -783,30 +735,6 @@ unsafe fn create_shader_module(device: &Device, bytecode: &[u8]) -> Result<vk::S
         .code(bytecode);
 
     Ok(device.create_shader_module(&info, None)?)
-}
-
-unsafe fn create_framebuffers(
-    _instance: &Instance,
-    device: &Device,
-    data: &mut AppData,
-) -> Result<()> {
-    data.framebuffers = data
-        .swapchain_image_views
-        .iter()
-        .map(|i| {
-            let attachments = &[*i];
-            let info = vk::FramebufferCreateInfo::builder()
-                .render_pass(data.render_pass)
-                .attachments(attachments)
-                .width(data.swapchain_extent.width)
-                .height(data.swapchain_extent.height)
-                .layers(1);
-
-            device.create_framebuffer(&info, None)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    Ok(())
 }
 
 unsafe fn create_command_pool(
@@ -861,14 +789,44 @@ unsafe fn record_command_buffer(
         },
     };
 
-    let clear_values = &[color_clear_value];
-    let info = vk::RenderPassBeginInfo::builder()
-        .render_pass(data.render_pass)
-        .framebuffer(data.framebuffers[image_index])
-        .render_area(render_area)
-        .clear_values(clear_values);
+    // Transition image from UNDEFINED to COLOR_ATTACHMENT_OPTIMAL
+    let barrier = vk::ImageMemoryBarrier2::builder()
+        .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+        .src_access_mask(vk::AccessFlags2::empty())
+        .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+        .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+        .old_layout(vk::ImageLayout::UNDEFINED)
+        .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+        .image(data.swapchain_images[image_index])
+        .subresource_range(
+            vk::ImageSubresourceRange::builder()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .base_mip_level(0)
+                .level_count(1)
+                .base_array_layer(0)
+                .layer_count(1)
+                .build(),
+        );
 
-    device.cmd_begin_render_pass(command_buffer, &info, vk::SubpassContents::INLINE);
+    let dependency_info =
+        vk::DependencyInfo::builder().image_memory_barriers(std::slice::from_ref(&barrier));
+
+    device.cmd_pipeline_barrier2(command_buffer, &dependency_info);
+
+    let color_attachment = vk::RenderingAttachmentInfo::builder()
+        .image_view(data.swapchain_image_views[image_index])
+        .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+        .load_op(vk::AttachmentLoadOp::CLEAR)
+        .store_op(vk::AttachmentStoreOp::STORE)
+        .clear_value(color_clear_value);
+
+    let color_attachments = &[color_attachment];
+    let rendering_info = vk::RenderingInfo::builder()
+        .render_area(render_area)
+        .layer_count(1)
+        .color_attachments(color_attachments);
+
+    device.cmd_begin_rendering(command_buffer, &rendering_info);
     device.cmd_bind_pipeline(
         command_buffer,
         vk::PipelineBindPoint::GRAPHICS,
@@ -892,7 +850,32 @@ unsafe fn record_command_buffer(
     device.cmd_set_scissor(command_buffer, 0, &[scissor]);
 
     device.cmd_draw(command_buffer, 3, 1, 0, 0);
-    device.cmd_end_render_pass(command_buffer);
+    device.cmd_end_rendering(command_buffer);
+
+    // Transition image from COLOR_ATTACHMENT_OPTIMAL to PRESENT_SRC_KHR
+    let barrier = vk::ImageMemoryBarrier2::builder()
+        .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+        .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+        .dst_stage_mask(vk::PipelineStageFlags2::BOTTOM_OF_PIPE)
+        .dst_access_mask(vk::AccessFlags2::empty())
+        .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+        .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+        .image(data.swapchain_images[image_index])
+        .subresource_range(
+            vk::ImageSubresourceRange::builder()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .base_mip_level(0)
+                .level_count(1)
+                .base_array_layer(0)
+                .layer_count(1)
+                .build(),
+        );
+
+    let dependency_info =
+        vk::DependencyInfo::builder().image_memory_barriers(std::slice::from_ref(&barrier));
+
+    device.cmd_pipeline_barrier2(command_buffer, &dependency_info);
+
     device.end_command_buffer(command_buffer)?;
 
     Ok(())

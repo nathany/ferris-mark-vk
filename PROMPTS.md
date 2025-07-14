@@ -626,6 +626,14 @@ FPS: 82.9 | Frame time: 11.99ms | Sprites: 50000 | Sprites/sec: 4146880 | Resolu
 - **Panic behavior**: `abort` for smaller binaries
 - **Purpose**: Benchmarking, production
 
+
+> I think that the VALIDATION_ENABLED logging may be a little inaccurate? When it says "Validation layers: Disabled (Release)", are we sure the validation layers are disabled? Or are they still enabled because I have them enabled in vkconfig?
+
+✅ Validation Layer Reality Check**
+- **Our app control**: We can choose whether to request validation layers
+- **vkconfig override**: Can force validation layers on ANY Vulkan app
+- **End user systems**: Won't have vkconfig, so validation layers won't run
+
 ---
 
 > Please upgrade this project to Rust 2024. This will require a lot of changes to how we're using unsafe.

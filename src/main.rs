@@ -595,7 +595,8 @@ unsafe fn create_instance(window: &Window, entry: &Entry, _data: &mut AppData) -
         .collect::<Vec<_>>();
 
     let mut layers = Vec::new();
-    if VALIDATION_ENABLED {
+    let validation_disabled = std::env::var("VK_DISABLE_VALIDATION").is_ok();
+    if VALIDATION_ENABLED && !validation_disabled {
         check_validation_layer_support(entry)?;
         layers.push(VALIDATION_LAYER.as_ptr());
     }
@@ -715,7 +716,8 @@ unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Resu
         })
         .collect::<Vec<_>>();
 
-    let layers = if VALIDATION_ENABLED {
+    let validation_disabled = std::env::var("VK_DISABLE_VALIDATION").is_ok();
+    let layers = if VALIDATION_ENABLED && !validation_disabled {
         vec![VALIDATION_LAYER.as_ptr()]
     } else {
         vec![]
@@ -1813,14 +1815,14 @@ fn main() -> Result<()> {
         "VSync: {}",
         if vsync_enabled { "Enabled" } else { "Disabled" }
     );
-    println!(
-        "Validation layers: {}",
-        if VALIDATION_ENABLED {
-            "Enabled (Debug)"
-        } else {
-            "Disabled (Release)"
-        }
-    );
+    let validation_status = if std::env::var("VK_DISABLE_VALIDATION").is_ok() {
+        "Force disabled by VK_DISABLE_VALIDATION"
+    } else if VALIDATION_ENABLED {
+        "Requested by app (vkconfig may override)"
+    } else {
+        "Not requested by app (vkconfig may override)"
+    };
+    println!("Validation layers: {}", validation_status);
     println!("Performance metrics will be logged every second...\n");
 
     let event_loop = EventLoop::new()?;

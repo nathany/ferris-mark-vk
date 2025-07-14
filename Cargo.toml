@@ -13,3 +13,17 @@ bytemuck = { version = "1.14", features = ["derive"] }
 log = "0.4"
 pretty_env_logger = "0.5"
 image = "0.25"
+
+[profile.dev]
+# Debug builds: Enable validation layers and debug info
+debug = true
+opt-level = 1  # Some optimization for better debug performance
+
+[profile.release]
+# Release builds: Maximum performance
+debug = false
+lto = true            # Link-time optimization
+codegen-units = 1     # Better optimization at cost of compile time
+panic = "abort"       # Smaller binary size
+strip = true          # Remove debug symbols
+opt-level = 3         # Maximum optimization

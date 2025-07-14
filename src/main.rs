@@ -16,7 +16,7 @@ use winit::event::{Event, WindowEvent};
 use winit::event_loop::EventLoop;
 use winit::window::{Window, WindowBuilder};
 
-const VALIDATION_ENABLED: bool = false;
+const VALIDATION_ENABLED: bool = cfg!(debug_assertions);
 const VALIDATION_LAYER: vk::ExtensionName =
     vk::ExtensionName::from_bytes(b"VK_LAYER_KHRONOS_validation");
 
@@ -918,14 +918,14 @@ unsafe fn create_swapchain_image_views(
 unsafe fn create_pipeline(_instance: &Instance, device: &Device, data: &mut AppData) -> Result<()> {
     let compiler = shaderc::Compiler::new().unwrap();
 
-    let vert_shader_source = std::fs::read_to_string("shaders/sprite_opt.vert")?;
-    let frag_shader_source = std::fs::read_to_string("shaders/sprite_opt.frag")?;
+    let vert_shader_source = std::fs::read_to_string("shaders/sprite.vert")?;
+    let frag_shader_source = std::fs::read_to_string("shaders/sprite.frag")?;
 
     let vert_compiled = compiler
         .compile_into_spirv(
             &vert_shader_source,
             shaderc::ShaderKind::Vertex,
-            "sprite_opt.vert",
+            "sprite.vert",
             "main",
             None,
         )
@@ -935,7 +935,7 @@ unsafe fn create_pipeline(_instance: &Instance, device: &Device, data: &mut AppD
         .compile_into_spirv(
             &frag_shader_source,
             shaderc::ShaderKind::Fragment,
-            "sprite_opt.frag",
+            "sprite.frag",
             "main",
             None,
         )
@@ -1812,6 +1812,14 @@ fn main() -> Result<()> {
     println!(
         "VSync: {}",
         if vsync_enabled { "Enabled" } else { "Disabled" }
+    );
+    println!(
+        "Validation layers: {}",
+        if VALIDATION_ENABLED {
+            "Enabled (Debug)"
+        } else {
+            "Disabled (Release)"
+        }
     );
     println!("Performance metrics will be logged every second...\n");
 

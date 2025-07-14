@@ -604,6 +604,36 @@ FPS: 82.9 | Frame time: 11.99ms | Sprites: 50000 | Sprites/sec: 4146880 | Resolu
    - **Benefit**: Potential 2-4x physics performance
    - **Effort**: Medium (requires algorithm restructuring)
 
+
+---
+
+> Excellent. Thanks! I'm seeing a lot of different shader files. Do we still need them all?
+> Beyond the validation layer differences in config.toml, do we have other differences between release/debug? Do we need to?
+
+✅ Build Configuration Optimized**
+
+#### **Debug Build (`cargo run`)**
+- **Validation layers**: ✅ Enabled automatically
+- **Debug symbols**: ✅ Enabled
+- **Optimization**: Level 1 (good debug performance)
+- **Purpose**: Development, debugging, validation
+
+#### **Release Build (`cargo run --release`)**
+- **Validation layers**: ❌ Disabled automatically
+- **Debug symbols**: ❌ Stripped
+- **Optimization**: Level 3 + LTO + codegen-units=1
+- **Binary size**: Minimized with `strip = true`
+- **Panic behavior**: `abort` for smaller binaries
+- **Purpose**: Benchmarking, production
+
+---
+
+> Please upgrade this project to Rust 2024. This will require a lot of changes to how we're using unsafe.
+
+>
+
+---
+
 ## Maybe Later
 
 **Memory usage profiling**: Understand actual memory consumption patterns

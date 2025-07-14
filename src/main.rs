@@ -17,7 +17,10 @@ const VALIDATION_ENABLED: bool = false;
 const VALIDATION_LAYER: vk::ExtensionName =
     vk::ExtensionName::from_bytes(b"VK_LAYER_KHRONOS_validation");
 
-const DEVICE_EXTENSIONS: &[vk::ExtensionName] = &[vk::KHR_SWAPCHAIN_EXTENSION.name];
+const DEVICE_EXTENSIONS: &[vk::ExtensionName] = &[
+    vk::KHR_SWAPCHAIN_EXTENSION.name,
+    vk::KHR_SYNCHRONIZATION2_EXTENSION.name,
+];
 const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
 #[derive(Clone, Debug)]
@@ -187,22 +190,31 @@ impl App {
         record_command_buffer(&self.device, &self.data, command_buffer, image_index)?;
 
         // Use frame-based acquire semaphore but image-based render finished semaphore
-        let wait_semaphores = &[self.data.image_available_semaphores
-            [self.data.frame % self.data.image_available_semaphores.len()]];
-        let wait_stages = &[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
-        let command_buffers = &[command_buffer];
-        let signal_semaphores = &[self.data.render_finished_semaphores[image_index]];
-        let submit_info = vk::SubmitInfo::builder()
-            .wait_semaphores(wait_semaphores)
-            .wait_dst_stage_mask(wait_stages)
-            .command_buffers(command_buffers)
-            .signal_semaphores(signal_semaphores);
+        let wait_semaphore_submit_info = vk::SemaphoreSubmitInfo::builder()
+            .semaphore(
+                self.data.image_available_semaphores
+                    [self.data.frame % self.data.image_available_semaphores.len()],
+            )
+            .stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT);
+
+        let command_buffer_submit_info =
+            vk::CommandBufferSubmitInfo::builder().command_buffer(command_buffer);
+
+        let signal_semaphore_submit_info = vk::SemaphoreSubmitInfo::builder()
+            .semaphore(self.data.render_finished_semaphores[image_index])
+            .stage_mask(vk::PipelineStageFlags2::ALL_GRAPHICS);
+
+        let submit_info = vk::SubmitInfo2::builder()
+            .wait_semaphore_infos(std::slice::from_ref(&wait_semaphore_submit_info))
+            .command_buffer_infos(std::slice::from_ref(&command_buffer_submit_info))
+            .signal_semaphore_infos(std::slice::from_ref(&signal_semaphore_submit_info));
 
         self.device
-            .queue_submit(self.data.graphics_queue, &[submit_info], in_flight_fence)?;
+            .queue_submit2(self.data.graphics_queue, &[submit_info], in_flight_fence)?;
 
         let swapchains = &[self.data.swapchain];
         let image_indices = &[image_index as u32];
+        let signal_semaphores = &[self.data.render_finished_semaphores[image_index]];
         let present_info = vk::PresentInfoKHR::builder()
             .wait_semaphores(signal_semaphores)
             .swapchains(swapchains)
@@ -452,13 +464,17 @@ unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Resu
         log::info!("Using basic Vulkan features (pre-1.4 device)");
     }
 
+    let mut sync2_features =
+        vk::PhysicalDeviceSynchronization2Features::builder().synchronization2(true);
+
     let features = vk::PhysicalDeviceFeatures::builder();
 
     let info = vk::DeviceCreateInfo::builder()
         .queue_create_infos(&queue_infos)
         .enabled_layer_names(&layers)
         .enabled_extension_names(&extensions)
-        .enabled_features(&features);
+        .enabled_features(&features)
+        .push_next(&mut sync2_features);
 
     let device = instance.create_device(data.physical_device, &info, None)?;
 

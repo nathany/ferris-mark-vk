@@ -1,9 +1,9 @@
-This is a Vulkan experiment for personal use on my Windows 11 development machine.
+This is a Vulkan 1.4 app using Vulkanalia. It's for personal use on a Windows 11 development machine,
+so we're free to experiment with new Vulkan features.
 
 Please run clippy after each refactor or feature addition.
 
-Please always resolve Vulkan validation layer errors and warnings after any change,
-though performance validation layers may be disabled or ignored for now.
+Please always resolve Vulkan validation layer errors and warnings after any change.
 
 Please write code that is as concise as reasonably possible.
 

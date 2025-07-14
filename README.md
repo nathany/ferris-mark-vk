@@ -12,3 +12,11 @@ Install on Windows 11 with winget:
 ```
 winget install vulkansdk
 ```
+
+## Run it
+
+To run with 1000 sprites:
+
+```
+cargo run --release 1000
+```

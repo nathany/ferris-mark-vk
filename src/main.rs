@@ -31,8 +31,8 @@ const INITIAL_WINDOW_WIDTH: u32 = 1920;
 const INITIAL_WINDOW_HEIGHT: u32 = 1080;
 
 // Physics constants
-const GRAVITY: f32 = 0.95;
-const BOUNCE_DAMPING: f32 = 0.85;
+const GRAVITY: f32 = 0.5;
+const BOUNCE_DAMPING: f32 = 0.90;
 
 // Sprite data for physics simulation
 #[derive(Clone, Debug)]
@@ -77,8 +77,8 @@ fn generate_sprites(count: usize) -> Vec<Sprite> {
         sprites.push(Sprite {
             pos_x: rand1 * (LOGICAL_WIDTH - sprite_width),
             pos_y: rand2 * (LOGICAL_HEIGHT - sprite_height),
-            vel_x: (rand3 - 0.5) * 5.0, // Random velocity between -2.5 and 2.5
-            vel_y: rand4 * 2.5 + 2.5,   // Random upward velocity between 2.5 and 5.0
+            vel_x: (rand3 - 0.5) * 10.0, // Random velocity between -5.0 and 5.0
+            vel_y: rand4 * 5.0 + 5.0,    // Random upward velocity between 5.0 and 10.0
         });
     }
 
@@ -422,9 +422,18 @@ impl App {
                 sprite.vel_y *= -BOUNCE_DAMPING;
                 sprite.pos_y = LOGICAL_HEIGHT - sprite_height;
 
-                // Add some random bounce variation
-                if sprite.vel_y.abs() < 0.5 {
-                    sprite.vel_y -= 1.0;
+                // Add random upward boost like in Go version (50% chance)
+                use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
+                let mut hasher = DefaultHasher::new();
+                (sprite.pos_x as u64).hash(&mut hasher);
+                let seed = hasher.finish();
+                let rand = ((seed.wrapping_mul(16807) % 2147483647) as f32) / 2147483647.0;
+
+                if rand < 0.5 {
+                    let boost_rand =
+                        (((seed >> 16).wrapping_mul(16807) % 2147483647) as f32) / 2147483647.0;
+                    sprite.vel_y -= boost_rand * 9.0; // Random boost between 0 and 9
                 }
             }
             if sprite.pos_y < 0.0 {

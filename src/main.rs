@@ -11,7 +11,7 @@ use vulkanalia::{
 };
 use winit::dpi::PhysicalSize;
 use winit::event::{Event, WindowEvent};
-use winit::event_loop::{ControlFlow, EventLoop};
+use winit::event_loop::EventLoop;
 use winit::window::{Window, WindowBuilder};
 
 const VALIDATION_ENABLED: bool = false;
@@ -632,8 +632,8 @@ unsafe fn create_pipeline(_instance: &Instance, device: &Device, data: &mut AppD
         .offset(vk::Offset2D { x: 0, y: 0 })
         .extent(data.swapchain_extent);
 
-    let viewports = &[viewport];
-    let scissors = &[scissor];
+    let _viewports = &[viewport];
+    let _scissors = &[scissor];
     let viewport_state = vk::PipelineViewportStateCreateInfo::builder()
         .viewport_count(1)
         .scissor_count(1);
@@ -842,7 +842,7 @@ unsafe fn create_sync_objects(
 }
 
 fn main() -> Result<()> {
-    let event_loop = EventLoop::new();
+    let event_loop = EventLoop::new()?;
     let window = WindowBuilder::new()
         .with_title("Vulkan Triangle")
         .with_inner_size(winit::dpi::LogicalSize::new(800, 600))
@@ -850,26 +850,26 @@ fn main() -> Result<()> {
 
     let mut app = unsafe { App::create(&window)? };
 
-    event_loop.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::Poll;
-
-        match event {
-            Event::WindowEvent {
-                event: WindowEvent::CloseRequested,
-                ..
-            } => {
-                unsafe {
-                    app.destroy();
-                }
-                *control_flow = ControlFlow::Exit;
+    event_loop.run(move |event, target| match event {
+        Event::WindowEvent {
+            event: WindowEvent::CloseRequested,
+            ..
+        } => {
+            unsafe {
+                app.destroy();
             }
-            Event::RedrawRequested(_) => unsafe {
-                let _ = app.render(&window);
-            },
-            Event::MainEventsCleared => {
-                window.request_redraw();
-            }
-            _ => {}
+            target.exit();
         }
-    })
+        Event::WindowEvent {
+            event: WindowEvent::RedrawRequested,
+            ..
+        } => unsafe {
+            let _ = app.render(&window);
+        },
+        Event::AboutToWait => {
+            window.request_redraw();
+        }
+        _ => {}
+    })?;
+    Ok(())
 }

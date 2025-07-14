@@ -111,3 +111,17 @@ Major Issues Encountered
     - **Solution**: Used `[0.0, 0.0, 0.0, 0.0]` clear and proper flags
 
 ---
+
+> Unchanged vulkanalia v0.21.0 (available: v0.28.0)
+> Unchanged winit v0.28.7 (available: v0.30.11)
+
+> Please upgrade vulkanalia in this project to latest. This may require a newer version of winit with a compatible version of raw-window-handle, which may also require fixes to breaking changes. I'm not concerned if we're on the latest version of winit -- just whatever is compatible with the latest vulkanalia.
+
+> Feel free to upgrade other crates as well, but perhaps not all at once.
+
+1. **Updated Cargo.toml dependencies:**
+   - `vulkanalia`: 0.21 → 0.28 (major upgrade to latest version)
+   - `winit`: 0.28 → 0.29 (upgraded for raw-window-handle 0.6 compatibility)
+   - `glam`: 0.24 → 0.25 (minor version bump)
+
+---

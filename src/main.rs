@@ -698,14 +698,14 @@ unsafe fn create_swapchain_image_views(
 unsafe fn create_pipeline(_instance: &Instance, device: &Device, data: &mut AppData) -> Result<()> {
     let compiler = shaderc::Compiler::new().unwrap();
 
-    let vert_shader_source = std::fs::read_to_string("shaders/triangle.vert")?;
-    let frag_shader_source = std::fs::read_to_string("shaders/triangle.frag")?;
+    let vert_shader_source = std::fs::read_to_string("shaders/sprite.vert")?;
+    let frag_shader_source = std::fs::read_to_string("shaders/sprite.frag")?;
 
     let vert_compiled = compiler
         .compile_into_spirv(
             &vert_shader_source,
             shaderc::ShaderKind::Vertex,
-            "triangle.vert",
+            "sprite.vert",
             "main",
             None,
         )
@@ -715,7 +715,7 @@ unsafe fn create_pipeline(_instance: &Instance, device: &Device, data: &mut AppD
         .compile_into_spirv(
             &frag_shader_source,
             shaderc::ShaderKind::Fragment,
-            "triangle.frag",
+            "sprite.frag",
             "main",
             None,
         )

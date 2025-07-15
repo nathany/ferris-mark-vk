@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 vulkanalia = { version = "0.29", features = ["window", "libloading"] }
+vulkanalia-vma = "0.3.0"
 winit = "0.29"
 glam = "0.30"
 shaderc = "0.9"

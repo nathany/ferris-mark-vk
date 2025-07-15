@@ -29,7 +29,10 @@ fn map_shader_error(error: shaderc::Error) -> anyhow::Error {
 }
 
 // Vulkan extensions required for rendering to a window surface
-const DEVICE_EXTENSIONS: &[vk::ExtensionName] = &[vk::KHR_SWAPCHAIN_EXTENSION.name];
+const DEVICE_EXTENSIONS: &[vk::ExtensionName] = &[
+    vk::KHR_SWAPCHAIN_EXTENSION.name,
+    vk::EXT_MEMORY_PRIORITY_EXTENSION.name,
+];
 
 // Minimum Vulkan versions for our feature requirements
 const MIN_VULKAN_VERSION: u32 = vk::make_version(1, 1, 0); // For VK_KHR_dynamic_rendering extension support
@@ -421,9 +424,10 @@ impl App {
             log_gpu_info(&instance, &mut data);
             let device = create_logical_device(&instance, &mut data)?;
 
-            // Create VMA allocator
-            let allocator_options =
+            // Create VMA allocator with memory priority support
+            let mut allocator_options =
                 vma::AllocatorOptions::new(&instance, &device, data.physical_device);
+            allocator_options.flags |= vma::AllocatorCreateFlags::EXT_MEMORY_PRIORITY;
             let allocator = Some(vma::Allocator::new(&allocator_options)?);
 
             // Create swapchain for rendering to window
@@ -1605,6 +1609,7 @@ unsafe fn create_texture_image(
         // Create staging buffer using VMA for CPU-visible memory
         let staging_allocation_options = vma::AllocationOptions {
             usage: vma::MemoryUsage::AutoPreferHost,
+            priority: 0.3, // Lower priority - temporary staging buffer
             flags: vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
             ..Default::default()
         };
@@ -1617,9 +1622,11 @@ unsafe fn create_texture_image(
         std::ptr::copy_nonoverlapping(img.as_raw().as_ptr(), memory_ptr.cast(), size as usize);
         allocator.unmap_memory(staging_allocation);
 
-        // Create the actual GPU texture image using VMA
+        // Create the actual GPU texture image using VMA with high priority
         let image_allocation_options = vma::AllocationOptions {
             usage: vma::MemoryUsage::AutoPreferDevice, // GPU-only memory (faster)
+            priority: 1.0, // Highest priority - textures are frequently accessed by GPU
+            // Let VMA decide on dedicated allocation based on size
             ..Default::default()
         };
 
@@ -1735,6 +1742,7 @@ unsafe fn create_sprite_command_buffer(
 
         let allocation_options = vma::AllocationOptions {
             usage: vma::MemoryUsage::Auto, // CPU-visible memory for frequent updates
+            priority: 0.7,                 // High-medium priority - frequently updated sprite data
             flags: vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
                 | vma::AllocationCreateFlags::MAPPED, // Keep persistently mapped
             ..Default::default()

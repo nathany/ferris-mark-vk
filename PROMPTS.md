@@ -870,6 +870,28 @@ Lines that could be eliminated:**
 > Documentation is available at: https://docs.rs/vulkanalia-vma/latest/vulkanalia_vma/
 > This is a challenging upgrade, so we should make a plan first. And determine if we can break it down into smaller steps.
 
+VMA Migration Complete! ✅
+
+---
+
+> Awesome! Please run the app to see the best practices suggestions from AMD and NVIDIA, several around memory allocation.
+> Now that we are using VMA, would some of these changes be easier? What would the magnitude of the code change be? Would it be more difficult to understand afterwards? What might the benefits be?
+
+Our application is already doing several things well with VMA:
+- Using persistent mapping for frequently updated buffers (`MAPPED` flag)
+- Using appropriate memory usage types (`AutoPreferDevice` for GPU-only, `Auto` for CPU-to-GPU)
+- Proper memory type selection through VMA's automatic selection
+
+1. **NVIDIA Memory Priority Warning** 🔴 **HIGH IMPACT
+2. **NVIDIA Pageable Device Local Memory** 🟡 **MEDIUM IMPACT
+3. **AMD Pipeline Layout Size Warning** 🟡 **MEDIUM IMPACT
+**Implementation**: Optimize descriptor set layout, use push constants more efficiently
+
+---
+
+> Please go through all the code and add concise comments suitable for someone still learning Vulkan.
+> Since the order deallocation is important for proper cleanup, we should comment on that too (on struct fields, etc) as appropriate.
+
 
 
 ---

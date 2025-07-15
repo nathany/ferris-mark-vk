@@ -905,27 +905,6 @@ The remaining warnings are unrelated to memory allocation:
 
 ## Maybe Later
 
-**Memory usage profiling**: Understand actual memory consumption patterns
-
-Validation Performance Warning: [ BestPractices-vkAllocateMemory-small-allocation ] | MessageID = 0xfd92477a
-vkAllocateMemory(): pAllocateInfo->allocationSize is 27720. This is a very small allocation (current threshold is 262144 bytes). You should make large allocations and sub-allocate from one large VkDeviceMemory.
-
-Question -- our frame times and FPS bounce around quite a bit each second. But I'm wondering how much of that is an issue with our rendering, vs. our metrics? Maybe we should be using an external tool?
-
-* VK_EXT_debug_utils in debug releases to give names to objects ?
-* VK_KHR_get_physical_device_properties2 ?
-
-* Recycling command buffers
-
-Other key extensions and Vulkan 1.4 features to consider:
-
-VK_EXT_descriptor_indexing (core in 1.2) - Enables bindless rendering patterns and more flexible descriptor management
-VK_KHR_buffer_device_address (core in 1.2) - Essential for modern GPU-driven techniques
-VK_EXT_mesh_shader - Modern geometry pipeline replacement for vertex/geometry shaders
-VK_KHR_ray_tracing_pipeline - If you're interested in ray tracing
-VK_EXT_multi_draw - Efficient multi-draw calls (could be good for sprites, but it's not core)
-VK_EXT_extended_dynamic_state series - More runtime flexibility
-
 ### VK_KHR_unified_image_layouts
 
 > I think we should give it a try. We can do this work on a branch that we can test out. I am running Windows with a non-beta AMD driver, and I can also test on another Windows computer with an NVIDIA driver.

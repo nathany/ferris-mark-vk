@@ -30,16 +30,18 @@ fn map_shader_error(error: shaderc::Error) -> anyhow::Error {
 
 // Vulkan extensions required for rendering to a window surface (always required)
 const REQUIRED_DEVICE_EXTENSIONS: &[vk::ExtensionName] = &[
-    vk::KHR_SWAPCHAIN_EXTENSION.name,
-    vk::EXT_MEMORY_PRIORITY_EXTENSION.name,
-    vk::EXT_PAGEABLE_DEVICE_LOCAL_MEMORY_EXTENSION.name,
+    vk::KHR_SWAPCHAIN_EXTENSION.name, // Enables rendering to window surfaces
+    vk::EXT_MEMORY_PRIORITY_EXTENSION.name, // Allows specifying memory allocation priorities
+    vk::EXT_PAGEABLE_DEVICE_LOCAL_MEMORY_EXTENSION.name, // Enables memory paging optimizations
 ];
 
 // Minimum Vulkan versions for our feature requirements
 const MIN_VULKAN_VERSION: u32 = vk::make_version(1, 1, 0); // For VK_KHR_dynamic_rendering extension support
 const PREFERRED_VULKAN_VERSION: u32 = vk::make_version(1, 3, 0); // VK_KHR_dynamic_rendering is core
 const OPTIMAL_VULKAN_VERSION: u32 = vk::make_version(1, 4, 0); // VK_KHR_synchronization2 is core
+
 // Number of frames we can work on simultaneously (prevents CPU waiting for GPU)
+// Modern GPUs can process multiple frames concurrently while displaying others
 const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
 // Logical resolution constants - our "virtual" resolution that sprites are positioned in
@@ -53,17 +55,17 @@ const INITIAL_WINDOW_HEIGHT: u32 = 1080;
 
 // Physics simulation constants
 const GRAVITY: f32 = 0.5; // Downward acceleration per frame
-const BOUNCE_DAMPING: f32 = 0.90; // Energy loss when sprites hit the ground
+const BOUNCE_DAMPING: f32 = 0.90; // Energy loss when sprites hit the ground (0.0-1.0)
 
 // Sprite rendering constants
-const SPRITE_WIDTH: f32 = 99.0; // Width of each Ferris sprite
-const SPRITE_HEIGHT: f32 = 70.0; // Height of each Ferris sprite
+const SPRITE_WIDTH: f32 = 99.0; // Width of each Ferris sprite in logical pixels
+const SPRITE_HEIGHT: f32 = 70.0; // Height of each Ferris sprite in logical pixels
 
 // Image and timing constants
 const RGBA_BYTES_PER_PIXEL: u32 = 4; // 4 bytes per pixel for RGBA format
 const TARGET_FPS: f32 = 60.0; // Target frame rate for physics scaling
 
-// Sprite velocity constants
+// Sprite velocity constants for randomized movement
 const MAX_INITIAL_HORIZONTAL_VELOCITY: f32 = 10.0; // Maximum initial horizontal velocity
 const MIN_INITIAL_VERTICAL_VELOCITY: f32 = 5.0; // Minimum initial upward velocity
 const MAX_INITIAL_VERTICAL_VELOCITY: f32 = 10.0; // Maximum initial upward velocity
@@ -118,8 +120,8 @@ impl App {
             commands.push(SpriteCommand {
                 transform: transform.to_cols_array_2d(),
                 color: [1.0, 1.0, 1.0, 1.0], // White tint (no modification)
-                uv_min: [0.0, 0.0],          // Top-left UV
-                uv_max: [1.0, 1.0],          // Bottom-right UV
+                uv_min: [0.0, 0.0],          // Top-left UV coordinate
+                uv_max: [1.0, 1.0],          // Bottom-right UV coordinate
             });
         }
 
@@ -127,42 +129,48 @@ impl App {
     }
 }
 
+// Sprite command structure sent to GPU - must be compatible with bytemuck for memcpy
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct SpriteCommand {
-    transform: [[f32; 4]; 4], // Mat4 as array for bytemuck compatibility
-    color: [f32; 4],
-    uv_min: [f32; 2],
-    uv_max: [f32; 2],
+    transform: [[f32; 4]; 4], // 4x4 transformation matrix as array for bytemuck compatibility
+    color: [f32; 4],          // RGBA color multiplier (1.0 = no change)
+    uv_min: [f32; 2],         // Minimum texture coordinates (top-left)
+    uv_max: [f32; 2],         // Maximum texture coordinates (bottom-right)
 }
 
+// Push constants structure - small data sent directly to shaders without buffers
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct PushConstants {
-    view_proj: [[f32; 4]; 4], // Mat4 as array for bytemuck compatibility
+    view_proj: [[f32; 4]; 4], // View-projection matrix as array for bytemuck compatibility
 }
 
-#[derive(Clone, Debug)]
 // Vulkan queue families - different types of operations need different queues
+#[derive(Clone, Debug)]
 struct QueueFamilyIndices {
-    graphics: u32, // Queue that can run graphics commands (drawing)
+    graphics: u32, // Queue that can run graphics commands (drawing triangles)
     present: u32,  // Queue that can present images to the window surface
 }
 
 impl QueueFamilyIndices {
+    // Finds suitable queue families on the given physical device
     unsafe fn get(
         instance: &Instance,
         data: &AppData,
         physical_device: vk::PhysicalDevice,
     ) -> Result<Self> {
         unsafe {
+            // Get all available queue families on this device
             let properties = instance.get_physical_device_queue_family_properties(physical_device);
 
+            // Find a queue family that supports graphics operations
             let graphics = properties
                 .iter()
                 .position(|p| p.queue_flags.contains(vk::QueueFlags::GRAPHICS))
                 .map(|i| i as u32);
 
+            // Find a queue family that can present to our window surface
             let mut present = None;
             for (index, _) in properties.iter().enumerate() {
                 if instance.get_physical_device_surface_support_khr(
@@ -184,23 +192,23 @@ impl QueueFamilyIndices {
     }
 }
 
-#[derive(Clone, Debug)]
 // Information about what the swapchain (rendering target) can support
+#[derive(Clone, Debug)]
 struct SwapchainSupport {
-    capabilities: vk::SurfaceCapabilitiesKHR, // Image count, size limits, etc.
+    capabilities: vk::SurfaceCapabilitiesKHR, // Image count limits, size limits, etc.
     formats: Vec<vk::SurfaceFormatKHR>,       // Available pixel formats (RGBA, BGRA, etc.)
-    present_modes: Vec<vk::PresentModeKHR>,   // Timing modes (VSync, immediate, etc.)
+    present_modes: Vec<vk::PresentModeKHR>,   // Timing modes (VSync, immediate, mailbox, etc.)
 }
 
 // Configuration for swapchain creation using builder pattern
 #[derive(Debug)]
 struct SwapchainConfig {
-    surface_format: vk::SurfaceFormatKHR,
-    present_mode: vk::PresentModeKHR,
-    extent: vk::Extent2D,
-    image_count: u32,
-    image_sharing_mode: vk::SharingMode,
-    queue_family_indices: Vec<u32>,
+    surface_format: vk::SurfaceFormatKHR, // Pixel format and color space
+    present_mode: vk::PresentModeKHR,     // VSync mode
+    extent: vk::Extent2D,                 // Image dimensions
+    image_count: u32,                     // Number of images in swapchain
+    image_sharing_mode: vk::SharingMode,  // How queues share access to images
+    queue_family_indices: Vec<u32>,       // Which queue families need access
 }
 
 impl SwapchainConfig {
@@ -225,7 +233,7 @@ impl SwapchainConfig {
 
         // Handle queue family sharing for the images
         let (image_sharing_mode, queue_family_indices) = if indices.graphics != indices.present {
-            // Different queues need concurrent access
+            // Different queues need concurrent access (slightly slower)
             (
                 vk::SharingMode::CONCURRENT,
                 vec![indices.graphics, indices.present],
@@ -257,19 +265,20 @@ impl SwapchainConfig {
             .image_color_space(self.surface_format.color_space)
             .image_extent(self.extent)
             .image_array_layers(SWAPCHAIN_IMAGE_ARRAY_LAYERS) // Always 1 unless doing stereoscopic 3D
-            .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT) // We'll render into these
+            .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT) // We'll render into these images
             .image_sharing_mode(self.image_sharing_mode)
             .queue_family_indices(&self.queue_family_indices)
             .pre_transform(capabilities.current_transform) // Don't transform images
             .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE) // Don't blend with other windows
             .present_mode(self.present_mode)
-            .clipped(true) // Don't care about obscured pixels
+            .clipped(true) // Don't care about obscured pixels (performance optimization)
             .old_swapchain(vk::SwapchainKHR::null()) // Not recreating an existing swapchain
             .build()
     }
 }
 
 impl SwapchainSupport {
+    // Queries the surface to determine what swapchain features are supported
     unsafe fn get(
         instance: &Instance,
         data: &AppData,
@@ -289,45 +298,46 @@ impl SwapchainSupport {
 }
 
 // Contains all Vulkan objects and application state
+// Order matters for cleanup - resources must be destroyed in reverse creation order
 struct AppData {
-    // Window surface and device selection
+    // Window surface and device selection (destroyed last)
     surface: vk::SurfaceKHR,             // The window surface we render to
     physical_device: vk::PhysicalDevice, // GPU we selected to use
     graphics_queue: vk::Queue,           // Queue for graphics commands
     present_queue: vk::Queue,            // Queue for presenting to screen
 
-    // Swapchain - double/triple buffering for smooth rendering
+    // Swapchain - double/triple buffering for smooth rendering (must be destroyed before device)
     swapchain_format: vk::Format,     // Pixel format (RGBA, BGRA, etc.)
     swapchain_extent: vk::Extent2D,   // Current window size in pixels
     swapchain: vk::SwapchainKHR,      // The swapchain itself
-    swapchain_images: Vec<vk::Image>, // Images we render into
-    swapchain_image_views: Vec<vk::ImageView>, // Views for accessing the images
+    swapchain_images: Vec<vk::Image>, // Images we render into (owned by swapchain)
+    swapchain_image_views: Vec<vk::ImageView>, // Views for accessing the images (must destroy before swapchain)
 
-    // Graphics pipeline - how to draw our sprites
+    // Graphics pipeline - how to draw our sprites (must be destroyed before device)
     pipeline_layout: vk::PipelineLayout, // Describes resources the pipeline uses
     pipeline: vk::Pipeline,              // The actual graphics pipeline
 
-    // Sprite data buffer - uploaded to GPU each frame
-    sprite_command_buffer: vk::Buffer, // GPU buffer containing sprite data
+    // Sprite data buffer - uploaded to GPU each frame (VMA manages cleanup order)
+    sprite_command_buffer: vk::Buffer, // GPU buffer containing sprite transformation data
     sprite_command_buffer_allocation: vma::Allocation, // VMA allocation for sprite buffer
-    sprite_command_buffer_mapped: *mut SpriteCommand, // CPU pointer to GPU memory
+    sprite_command_buffer_mapped: *mut SpriteCommand, // CPU pointer to GPU memory (persistently mapped)
 
-    // Descriptors - how shaders access resources
+    // Descriptors - how shaders access resources (must be destroyed before device)
     descriptor_set: vk::DescriptorSet, // Binds texture and sprite buffer to shaders
     descriptor_pool: vk::DescriptorPool, // Pool to allocate descriptor sets from
     descriptor_set_layout: vk::DescriptorSetLayout, // Layout of descriptor set
 
-    // Texture resources - the Ferris sprite image
+    // Texture resources - the Ferris sprite image (VMA manages cleanup order)
     texture_image: vk::Image, // GPU image containing sprite texture
     texture_image_allocation: vma::Allocation, // VMA allocation for texture image
-    texture_image_view: vk::ImageView, // View for accessing the texture
-    texture_sampler: vk::Sampler, // How to sample/filter the texture
+    texture_image_view: vk::ImageView, // View for accessing the texture (must destroy before image)
+    texture_sampler: vk::Sampler, // How to sample/filter the texture (must destroy before device)
 
-    // Command recording - how we tell the GPU what to draw
+    // Command recording - how we tell the GPU what to draw (must be destroyed before device)
     command_pool: vk::CommandPool, // Pool to allocate command buffers from
-    command_buffers: Vec<vk::CommandBuffer>, // Buffers containing GPU commands
+    command_buffers: Vec<vk::CommandBuffer>, // Buffers containing GPU commands (freed with pool)
 
-    // Synchronization - coordinating CPU and GPU work
+    // Synchronization - coordinating CPU and GPU work (must be destroyed before device)
     image_available_semaphores: Vec<vk::Semaphore>, // Signals when swapchain image is ready
     render_finished_semaphores: Vec<vk::Semaphore>, // Signals when rendering is done
     in_flight_fences: Vec<vk::Fence>,               // Synchronization for frames in flight
@@ -350,12 +360,13 @@ struct AppData {
 }
 
 // Main application state - owns all Vulkan objects
+// Destruction order: VMA allocations -> device -> instance -> entry
 struct App {
     #[allow(dead_code)]
-    entry: Entry, // Vulkan library entry point
-    instance: Instance,                // Vulkan instance - connection to Vulkan
-    device: Device,                    // Logical device - interface to the GPU
-    allocator: Option<vma::Allocator>, // VMA allocator for GPU memory management
+    entry: Entry, // Vulkan library entry point (destroyed last)
+    instance: Instance, // Vulkan instance - connection to Vulkan (destroyed second-to-last)
+    device: Device,     // Logical device - interface to the GPU (destroyed after VMA)
+    allocator: Option<vma::Allocator>, // VMA allocator for GPU memory management (destroyed before device)
     data: AppData,                     // All other Vulkan objects and app state
 }
 
@@ -368,7 +379,7 @@ impl App {
         frame_limit: Option<u32>,
     ) -> Result<Self> {
         let mut data = AppData {
-            // Initialize allocator as null - will be created after device
+            // Initialize all Vulkan handles as null - will be created in order
             surface: vk::SurfaceKHR::null(),
             physical_device: vk::PhysicalDevice::null(),
             graphics_queue: vk::Queue::null(),
@@ -412,38 +423,38 @@ impl App {
         };
 
         unsafe {
-            // Load Vulkan library and create entry point
+            // Step 1: Load Vulkan library and create entry point
             let loader = LibloadingLoader::new(LIBRARY)?;
             let entry = Entry::new(loader).map_err(map_entry_error)?;
 
-            // Create Vulkan instance and window surface
+            // Step 2: Create Vulkan instance and window surface
             let instance = create_instance(window, &entry, &mut data)?;
             data.surface = vk_window::create_surface(&instance, window, window)?;
 
-            // Select GPU and create logical device
+            // Step 3: Select GPU and create logical device
             pick_physical_device(&instance, &mut data)?;
             log_gpu_info(&instance, &mut data);
             let device = create_logical_device(&instance, &mut data)?;
 
-            // Create VMA allocator with memory priority support
+            // Step 4: Create VMA allocator with memory priority support
             let mut allocator_options =
                 vma::AllocatorOptions::new(&instance, &device, data.physical_device);
             allocator_options.flags |= vma::AllocatorCreateFlags::EXT_MEMORY_PRIORITY;
             let allocator = Some(vma::Allocator::new(&allocator_options)?);
 
-            // Create swapchain for rendering to window
+            // Step 5: Create swapchain for rendering to window
             create_swapchain(window, &instance, &device, &mut data, vsync_enabled)?;
             create_swapchain_image_views(&instance, &device, &mut data)?;
 
-            // Create command infrastructure
+            // Step 6: Create command infrastructure
             create_command_pool(&instance, &device, &mut data)?;
 
-            // Load and setup sprite texture
+            // Step 7: Load and setup sprite texture
             create_texture_image(&instance, &device, &mut data, allocator.as_ref().unwrap())?;
             create_texture_image_view(&instance, &device, &mut data)?;
             create_texture_sampler(&instance, &device, &mut data)?;
 
-            // Setup sprite rendering pipeline
+            // Step 8: Setup sprite rendering pipeline
             create_sprite_command_buffer(
                 &instance,
                 &device,
@@ -454,7 +465,7 @@ impl App {
             create_pipeline(&instance, &device, &mut data)?;
             create_descriptor_sets(&instance, &device, &mut data)?;
 
-            // Create command buffers and synchronization objects
+            // Step 9: Create command buffers and synchronization objects
             create_command_buffers(&instance, &device, &mut data)?;
             create_sync_objects(&instance, &device, &mut data)?;
 
@@ -472,7 +483,7 @@ impl App {
     unsafe fn render(&mut self, window: &Window) -> Result<bool> {
         let frame_start = Instant::now();
 
-        // Update physics simulation
+        // Update physics simulation with delta time
         let now = Instant::now();
         let dt = now.duration_since(self.data.last_update).as_secs_f32();
         self.data.last_update = now;
@@ -494,6 +505,7 @@ impl App {
 
         unsafe {
             // Wait for the previous frame using this fence to finish
+            // This prevents the CPU from getting too far ahead of the GPU
             self.device
                 .wait_for_fences(&[in_flight_fence], true, u64::MAX)?;
 
@@ -509,6 +521,7 @@ impl App {
             let image_index = match result {
                 Ok((image_index, _)) => image_index as usize,
                 Err(vk::ErrorCode::OUT_OF_DATE_KHR) => {
+                    // Swapchain is out of date (window resized), recreate it
                     self.handle_swapchain_recreation(window)?;
                     return Ok(true);
                 }
@@ -531,20 +544,20 @@ impl App {
                 &view_proj,
             )?;
 
-            // Setup synchronization: wait for image, signal when rendering done
+            // Setup synchronization: wait for image to be available, signal when rendering is done
             let wait_semaphore_submit_info = vk::SemaphoreSubmitInfo::builder()
                 .semaphore(
                     self.data.image_available_semaphores
                         [current_frame % self.data.image_available_semaphores.len()],
                 )
-                .stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT);
+                .stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT); // Wait before writing to framebuffer
 
             let command_buffer_submit_info =
                 vk::CommandBufferSubmitInfo::builder().command_buffer(command_buffer);
 
             let signal_semaphore_submit_info = vk::SemaphoreSubmitInfo::builder()
                 .semaphore(self.data.render_finished_semaphores[image_index])
-                .stage_mask(vk::PipelineStageFlags2::ALL_GRAPHICS);
+                .stage_mask(vk::PipelineStageFlags2::ALL_GRAPHICS); // Signal after all graphics work
 
             let submit_info = vk::SubmitInfo2::builder()
                 .wait_semaphore_infos(std::slice::from_ref(&wait_semaphore_submit_info))
@@ -560,7 +573,7 @@ impl App {
             let image_indices = &[image_index as u32];
             let signal_semaphores = &[self.data.render_finished_semaphores[image_index]];
             let present_info = vk::PresentInfoKHR::builder()
-                .wait_semaphores(signal_semaphores)
+                .wait_semaphores(signal_semaphores) // Wait for rendering to complete
                 .swapchains(swapchains)
                 .image_indices(image_indices);
 
@@ -570,6 +583,7 @@ impl App {
             match result {
                 Ok(_) => {}
                 Err(vk::ErrorCode::OUT_OF_DATE_KHR) => {
+                    // Swapchain became out of date during presentation
                     self.handle_swapchain_recreation(window)?;
                 }
                 Err(e) => return Err(anyhow!("{}", e)),
@@ -598,7 +612,7 @@ impl App {
             .duration_since(self.data.last_metrics_time)
             .as_secs_f32();
 
-        // Check if we should exit after frame limit
+        // Check if we should exit after frame limit (benchmark mode)
         if let Some(limit) = self.data.frame_limit {
             if self.data.total_frame_count >= limit {
                 // Print final benchmark summary before exiting
@@ -648,7 +662,7 @@ impl App {
     fn update_sprites(&mut self, dt: f32) {
         let sprite_size = Vec2::new(SPRITE_WIDTH, SPRITE_HEIGHT);
         let logical_bounds = Vec2::new(LOGICAL_WIDTH, LOGICAL_HEIGHT);
-        let scaled_dt = dt * TARGET_FPS; // Scale for consistent feel regardless of framerate
+        let scaled_dt = dt * TARGET_FPS; // Scale delta time for consistent physics regardless of framerate
         let gravity = Vec2::new(0.0, GRAVITY * scaled_dt);
 
         for sprite in &mut self.data.sprites {
@@ -699,6 +713,7 @@ impl App {
             let sprite_commands = self.sprites_to_commands();
 
             // Copy sprite data directly to GPU-visible memory
+            // This is efficient because the buffer is persistently mapped
             std::ptr::copy_nonoverlapping(
                 sprite_commands.as_ptr(),
                 self.data.sprite_command_buffer_mapped,
@@ -751,16 +766,16 @@ impl App {
         }
     }
 
-    // Cleans up swapchain resources
+    // Cleans up swapchain resources in proper order
     unsafe fn destroy_swapchain(&mut self) {
         unsafe {
-            // Destroy all image views first
+            // Destroy all image views first (dependent on swapchain images)
             for &image_view in &self.data.swapchain_image_views {
                 self.device.destroy_image_view(image_view, None);
             }
             self.data.swapchain_image_views.clear();
 
-            // Then destroy the swapchain itself
+            // Then destroy the swapchain itself (images are owned by swapchain)
             if self.data.swapchain != vk::SwapchainKHR::null() {
                 self.device.destroy_swapchain_khr(self.data.swapchain, None);
                 self.data.swapchain = vk::SwapchainKHR::null();
@@ -770,13 +785,17 @@ impl App {
         }
     }
 
+    // Destroys all Vulkan resources in reverse creation order
+    // This is critical for proper cleanup - resources must be destroyed before their dependencies
     unsafe fn destroy(&mut self) {
         unsafe {
+            // Wait for all operations to complete before destroying anything
             self.device.device_wait_idle().unwrap();
 
+            // 1. Destroy swapchain and related resources first
             self.destroy_swapchain();
 
-            // Destroy semaphores (one per swapchain image)
+            // 2. Destroy synchronization objects (semaphores and fences)
             for i in 0..self.data.image_available_semaphores.len() {
                 self.device
                     .destroy_semaphore(self.data.image_available_semaphores[i], None);
@@ -790,25 +809,28 @@ impl App {
                     .destroy_fence(self.data.in_flight_fences[i], None);
             }
 
+            // 3. Destroy command pool (this automatically frees all command buffers)
             self.device
                 .destroy_command_pool(self.data.command_pool, None);
 
-            // Destroy texture resources
+            // 4. Destroy texture resources (views before images)
             self.device.destroy_sampler(self.data.texture_sampler, None);
             self.device
                 .destroy_image_view(self.data.texture_image_view, None);
 
-            // Destroy descriptor resources
+            // 5. Destroy descriptor resources
             self.device
                 .destroy_descriptor_pool(self.data.descriptor_pool, None);
 
+            // 6. Destroy pipeline and layout
             self.device.destroy_pipeline(self.data.pipeline, None);
             self.device
                 .destroy_pipeline_layout(self.data.pipeline_layout, None);
             self.device
                 .destroy_descriptor_set_layout(self.data.descriptor_set_layout, None);
 
-            // Destroy all VMA allocations before destroying device
+            // 7. Destroy all VMA allocations before destroying device
+            // VMA manages the actual GPU memory and must be cleaned up before device
             if let Some(allocator) = &self.allocator {
                 allocator
                     .destroy_image(self.data.texture_image, self.data.texture_image_allocation);
@@ -818,12 +840,16 @@ impl App {
                 );
             }
 
-            // Explicitly drop VMA allocator before destroying device
+            // 8. Explicitly drop VMA allocator before destroying device
             self.allocator.take();
 
+            // 9. Destroy logical device (this invalidates all device-created objects)
             self.device.destroy_device(None);
+
+            // 10. Destroy surface (window-specific resource)
             self.instance.destroy_surface_khr(self.data.surface, None);
 
+            // 11. Destroy instance last (this cleans up the Vulkan connection)
             self.instance.destroy_instance(None);
         }
     }
@@ -831,7 +857,7 @@ impl App {
 
 // Creates the Vulkan instance - the connection between our app and the Vulkan library
 unsafe fn create_instance(window: &Window, entry: &Entry, _data: &mut AppData) -> Result<Instance> {
-    // Check what Vulkan version is available
+    // Check what Vulkan version is available on this system
     let loader_version = unsafe {
         entry
             .enumerate_instance_version()
@@ -861,7 +887,7 @@ unsafe fn create_instance(window: &Window, entry: &Entry, _data: &mut AppData) -
         ));
     };
 
-    // Application metadata
+    // Application metadata for debugging and optimization
     let application_info = vk::ApplicationInfo::builder()
         .application_name(b"Ferris Mark VK\0")
         .application_version(vk::make_version(1, 0, 0))
@@ -869,7 +895,7 @@ unsafe fn create_instance(window: &Window, entry: &Entry, _data: &mut AppData) -
         .engine_version(vk::make_version(1, 0, 0))
         .api_version(requested_version);
 
-    // Get extensions needed to render to our window
+    // Get extensions needed to render to our window surface
     let extensions = vk_window::get_required_instance_extensions(window)
         .iter()
         .map(|e| e.as_ptr())
@@ -879,7 +905,7 @@ unsafe fn create_instance(window: &Window, entry: &Entry, _data: &mut AppData) -
         .application_info(&application_info)
         .enabled_extension_names(&extensions);
 
-    // Create the Vulkan instance
+    // Create the Vulkan instance (validation layers are controlled by vkconfig)
     let instance = unsafe { entry.create_instance(&info, None)? };
 
     Ok(instance)
@@ -993,8 +1019,6 @@ unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Resu
         })
         .collect::<Vec<_>>();
 
-    // Extensions this device needs to support
-
     let properties = unsafe { instance.get_physical_device_properties(data.physical_device) };
 
     // Determine device capabilities and required extensions
@@ -1020,13 +1044,11 @@ unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Resu
     let mut required_extensions = REQUIRED_DEVICE_EXTENSIONS.to_vec();
     let is_vulkan_13_plus = device_version >= vk::make_version(1, 3, 0);
 
-    // Add VK_KHR_synchronization2 extension if not core (core in 1.3+, not 1.4+)
+    // Add extensions that aren't core in older Vulkan versions
     if !is_vulkan_13_plus {
+        // VK_KHR_synchronization2 provides enhanced synchronization (core in 1.3+)
         required_extensions.push(vk::KHR_SYNCHRONIZATION2_EXTENSION.name);
-    }
-
-    // Add VK_KHR_dynamic_rendering extension if not core (core in 1.3+)
-    if !is_vulkan_13_plus {
+        // VK_KHR_dynamic_rendering eliminates render passes (core in 1.3+)
         required_extensions.push(vk::KHR_DYNAMIC_RENDERING_EXTENSION.name);
     }
 
@@ -1042,8 +1064,8 @@ unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Resu
     let device = if is_vulkan_13_plus {
         // Use Vulkan 1.3+ core features
         let mut vulkan13_features = vk::PhysicalDeviceVulkan13Features::builder()
-            .dynamic_rendering(true)
-            .synchronization2(true);
+            .dynamic_rendering(true) // No render passes needed
+            .synchronization2(true); // Enhanced synchronization
 
         let mut memory_priority_features =
             vk::PhysicalDeviceMemoryPriorityFeaturesEXT::builder().memory_priority(true);
@@ -1139,7 +1161,7 @@ fn get_swapchain_surface_format(formats: &[vk::SurfaceFormatKHR]) -> vk::Surface
     formats
         .iter()
         .find(|f| {
-            // Prefer BGRA 8-bit with sRGB color space (most common)
+            // Prefer BGRA 8-bit with sRGB color space (most common and efficient)
             f.format == vk::Format::B8G8R8A8_SRGB
                 && f.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
         })
@@ -1147,15 +1169,16 @@ fn get_swapchain_surface_format(formats: &[vk::SurfaceFormatKHR]) -> vk::Surface
         .unwrap_or(formats[0]) // Fall back to first available format
 }
 
+// Chooses the best present mode based on VSync preference
 fn get_swapchain_present_mode(
     present_modes: &[vk::PresentModeKHR],
     vsync_enabled: bool,
 ) -> vk::PresentModeKHR {
     if vsync_enabled {
-        // VSync enabled - prefer FIFO (guaranteed available)
+        // VSync enabled - use FIFO (guaranteed available, synchronized to refresh rate)
         vk::PresentModeKHR::FIFO
     } else {
-        // VSync disabled - prefer IMMEDIATE, fallback to MAILBOX, then FIFO
+        // VSync disabled - prefer IMMEDIATE (no sync), fallback to MAILBOX (triple buffering), then FIFO
         present_modes
             .iter()
             .cloned()
@@ -1170,10 +1193,13 @@ fn get_swapchain_present_mode(
     }
 }
 
+// Determines the swapchain image resolution based on window size and surface capabilities
 fn get_swapchain_extent(window: &Window, capabilities: vk::SurfaceCapabilitiesKHR) -> vk::Extent2D {
     if capabilities.current_extent.width != u32::MAX {
+        // Most platforms provide the extent directly
         capabilities.current_extent
     } else {
+        // Some platforms require us to calculate it ourselves
         let PhysicalSize { width, height } = window.inner_size();
         let clamp = |min: u32, max: u32, v: u32| min.max(max.min(v));
         vk::Extent2D::builder()
@@ -1232,7 +1258,7 @@ unsafe fn create_swapchain_image_views(
 
 // Creates the graphics pipeline - defines how to render our sprites
 unsafe fn create_pipeline(_instance: &Instance, device: &Device, data: &mut AppData) -> Result<()> {
-    // Load and compile shaders at runtime
+    // Load and compile shaders at runtime using shaderc
     let compiler = shaderc::Compiler::new().unwrap();
     let vert_shader_source = std::fs::read_to_string("shaders/sprite.vert")?;
     let frag_shader_source = std::fs::read_to_string("shaders/sprite.frag")?;
@@ -1447,6 +1473,7 @@ unsafe fn create_command_buffers(
     }
 }
 
+// Records drawing commands into a command buffer for one frame
 unsafe fn record_command_buffer(
     device: &Device,
     command_buffer: vk::CommandBuffer,
@@ -1494,11 +1521,12 @@ unsafe fn record_command_buffer(
 
         device.cmd_pipeline_barrier2(command_buffer, &dependency_info);
 
+        // Start dynamic rendering (no render pass needed)
         let color_attachment = vk::RenderingAttachmentInfo::builder()
             .image_view(data.swapchain_image_views[image_index])
             .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-            .load_op(vk::AttachmentLoadOp::CLEAR)
-            .store_op(vk::AttachmentStoreOp::STORE)
+            .load_op(vk::AttachmentLoadOp::CLEAR) // Clear to background color
+            .store_op(vk::AttachmentStoreOp::STORE) // Save the rendered result
             .clear_value(color_clear_value);
 
         let color_attachments = &[color_attachment];
@@ -1508,12 +1536,15 @@ unsafe fn record_command_buffer(
             .color_attachments(color_attachments);
 
         device.cmd_begin_rendering(command_buffer, &rendering_info);
+
+        // Bind our graphics pipeline
         device.cmd_bind_pipeline(
             command_buffer,
             vk::PipelineBindPoint::GRAPHICS,
             data.pipeline,
         );
 
+        // Set up viewport to cover the entire window
         let viewport = vk::Viewport::builder()
             .x(0.0)
             .y(0.0)
@@ -1524,6 +1555,7 @@ unsafe fn record_command_buffer(
 
         device.cmd_set_viewport(command_buffer, 0, &[viewport]);
 
+        // Set up scissor rectangle (no clipping)
         let scissor = vk::Rect2D::builder()
             .offset(vk::Offset2D { x: 0, y: 0 })
             .extent(data.swapchain_extent);
@@ -1541,7 +1573,7 @@ unsafe fn record_command_buffer(
             &[],
         );
 
-        // Push constants with view-projection matrix only
+        // Push constants with view-projection matrix
         let push_constants = PushConstants {
             view_proj: *view_proj,
         };
@@ -1556,7 +1588,7 @@ unsafe fn record_command_buffer(
             ),
         );
 
-        // Instanced draw: 6 vertices per quad, data.sprite_count instances
+        // Instanced draw: 6 vertices per quad (2 triangles), data.sprite_count instances
         device.cmd_draw(command_buffer, 6, data.sprite_count as u32, 0, 0);
 
         device.cmd_end_rendering(command_buffer);
@@ -1601,7 +1633,7 @@ unsafe fn create_texture_image(
     // Load image from disk and convert to RGBA format
     let img = image::open("ferris.png")?.to_rgba8();
     let (width, height) = (img.width(), img.height());
-    let size = u64::from(width * height * RGBA_BYTES_PER_PIXEL); // RGBA bytes per pixel
+    let size = u64::from(width * height * RGBA_BYTES_PER_PIXEL);
 
     // Create staging buffer to temporarily hold image data in CPU-accessible memory
     let staging_buffer_info = vk::BufferCreateInfo::builder()
@@ -1647,7 +1679,6 @@ unsafe fn create_texture_image(
         let image_allocation_options = vma::AllocationOptions {
             usage: vma::MemoryUsage::AutoPreferDevice, // GPU-only memory (faster)
             priority: 1.0, // Highest priority - textures are frequently accessed by GPU
-            // Let VMA decide on dedicated allocation based on size
             ..Default::default()
         };
 
@@ -1856,6 +1887,7 @@ unsafe fn create_descriptor_sets(
     }
 }
 
+// Copies data from a buffer to an image using a one-time command buffer
 unsafe fn copy_buffer_to_image(
     device: &Device,
     data: &AppData,
@@ -1865,6 +1897,7 @@ unsafe fn copy_buffer_to_image(
     height: u32,
 ) -> Result<()> {
     unsafe {
+        // Allocate a temporary command buffer for this operation
         let alloc_info = vk::CommandBufferAllocateInfo::builder()
             .level(vk::CommandBufferLevel::PRIMARY)
             .command_pool(data.command_pool)
@@ -1877,10 +1910,11 @@ unsafe fn copy_buffer_to_image(
 
         device.begin_command_buffer(command_buffer, &info)?;
 
+        // Define the region to copy
         let region = vk::BufferImageCopy::builder()
-            .buffer_offset(0)
-            .buffer_row_length(0)
-            .buffer_image_height(0)
+            .buffer_offset(0) // Start of buffer
+            .buffer_row_length(0) // Tightly packed
+            .buffer_image_height(0) // No padding between rows
             .image_subresource(
                 vk::ImageSubresourceLayers::builder()
                     .aspect_mask(vk::ImageAspectFlags::COLOR)
@@ -1906,18 +1940,21 @@ unsafe fn copy_buffer_to_image(
 
         device.end_command_buffer(command_buffer)?;
 
+        // Submit and wait for completion
         let command_buffers = &[command_buffer];
         let info = vk::SubmitInfo::builder().command_buffers(command_buffers);
 
         device.queue_submit(data.graphics_queue, &[info], vk::Fence::null())?;
         device.queue_wait_idle(data.graphics_queue)?;
 
+        // Clean up temporary command buffer
         device.free_command_buffers(data.command_pool, &[command_buffer]);
 
         Ok(())
     }
 }
 
+// Transitions an image from one layout to another using a pipeline barrier
 unsafe fn transition_image_layout(
     device: &Device,
     data: &AppData,
@@ -1926,6 +1963,7 @@ unsafe fn transition_image_layout(
     new_layout: vk::ImageLayout,
 ) -> Result<()> {
     unsafe {
+        // Allocate a temporary command buffer for this operation
         let alloc_info = vk::CommandBufferAllocateInfo::builder()
             .level(vk::CommandBufferLevel::PRIMARY)
             .command_pool(data.command_pool)
@@ -1938,6 +1976,7 @@ unsafe fn transition_image_layout(
 
         device.begin_command_buffer(command_buffer, &info)?;
 
+        // Determine the correct access masks and pipeline stages for the transition
         let (src_access_mask, dst_access_mask, src_stage_mask, dst_stage_mask) =
             match (old_layout, new_layout) {
                 (vk::ImageLayout::UNDEFINED, vk::ImageLayout::TRANSFER_DST_OPTIMAL) => (
@@ -1961,7 +2000,7 @@ unsafe fn transition_image_layout(
         let barrier = vk::ImageMemoryBarrier::builder()
             .old_layout(old_layout)
             .new_layout(new_layout)
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED) // No queue ownership transfer
             .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .image(image)
             .subresource_range(
@@ -1988,12 +2027,14 @@ unsafe fn transition_image_layout(
 
         device.end_command_buffer(command_buffer)?;
 
+        // Submit and wait for completion
         let command_buffers = &[command_buffer];
         let info = vk::SubmitInfo::builder().command_buffers(command_buffers);
 
         device.queue_submit(data.graphics_queue, &[info], vk::Fence::null())?;
         device.queue_wait_idle(data.graphics_queue)?;
 
+        // Clean up temporary command buffer
         device.free_command_buffers(data.command_pool, &[command_buffer]);
 
         Ok(())
@@ -2030,17 +2071,18 @@ unsafe fn create_sync_objects(
     }
 }
 
+// Calculates scaling and offset for maintaining aspect ratio
 fn calculate_scaling_and_offset(window_width: f32, window_height: f32) -> (f32, f32, f32) {
     let window_aspect = window_width / window_height;
     let logical_aspect = LOGICAL_WIDTH / LOGICAL_HEIGHT;
 
     let (scale, viewport_width, viewport_height) = if window_aspect > logical_aspect {
-        // Window is wider than logical aspect ratio - pillarbox
+        // Window is wider than logical aspect ratio - add pillarboxes (black bars on sides)
         let scale = window_height / LOGICAL_HEIGHT;
         let viewport_width = LOGICAL_WIDTH * scale;
         (scale, viewport_width, window_height)
     } else {
-        // Window is taller than logical aspect ratio - letterbox
+        // Window is taller than logical aspect ratio - add letterboxes (black bars on top/bottom)
         let scale = window_width / LOGICAL_WIDTH;
         let viewport_height = LOGICAL_HEIGHT * scale;
         (scale, window_width, viewport_height)
@@ -2052,6 +2094,7 @@ fn calculate_scaling_and_offset(window_width: f32, window_height: f32) -> (f32, 
     (scale, offset_x, offset_y)
 }
 
+// Creates a view-projection matrix that maps logical coordinates to screen coordinates
 fn create_sprite_transform(window_width: f32, window_height: f32) -> [[f32; 4]; 4] {
     let (scale, offset_x, offset_y) = calculate_scaling_and_offset(window_width, window_height);
 
@@ -2060,7 +2103,7 @@ fn create_sprite_transform(window_width: f32, window_height: f32) -> [[f32; 4]; 
     let window_size = glam::vec2(window_width, window_height);
     let offset = glam::vec2(offset_x, offset_y);
 
-    // Calculate the actual viewport in normalized device coordinates
+    // Calculate the actual viewport in normalized device coordinates (-1 to 1)
     let viewport_min = (offset / window_size) * 2.0 - 1.0;
     let viewport_max = ((offset + logical_size * scale) / window_size) * 2.0 - 1.0;
 

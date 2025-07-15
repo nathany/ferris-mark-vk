@@ -884,8 +884,15 @@ Our application is already doing several things well with VMA:
 
 1. **NVIDIA Memory Priority Warning** 🔴 **HIGH IMPACT
 2. **NVIDIA Pageable Device Local Memory** 🟡 **MEDIUM IMPACT
-3. **AMD Pipeline Layout Size Warning** 🟡 **MEDIUM IMPACT
-**Implementation**: Optimize descriptor set layout, use push constants more efficiently
+
+The remaining warnings are unrelated to memory allocation:
+- Physical device features query (development practice)
+- Command pool reset strategy (command buffer management)
+- AMD pipeline layout size (descriptor set optimization)
+
+> Please review our extensions and features against what's available in core Vulkan versions to make sure everything is correct.
+
+
 
 ---
 

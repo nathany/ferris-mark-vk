@@ -28,8 +28,8 @@ fn map_shader_error(error: shaderc::Error) -> anyhow::Error {
     anyhow!("Shader compilation failed: {}", error)
 }
 
-// Vulkan extensions required for rendering to a window surface
-const DEVICE_EXTENSIONS: &[vk::ExtensionName] = &[
+// Vulkan extensions required for rendering to a window surface (always required)
+const REQUIRED_DEVICE_EXTENSIONS: &[vk::ExtensionName] = &[
     vk::KHR_SWAPCHAIN_EXTENSION.name,
     vk::EXT_MEMORY_PRIORITY_EXTENSION.name,
     vk::EXT_PAGEABLE_DEVICE_LOCAL_MEMORY_EXTENSION.name,
@@ -963,7 +963,10 @@ unsafe fn check_physical_device_extensions(
             .collect::<HashSet<_>>();
 
         // Check if all required extensions are supported
-        if DEVICE_EXTENSIONS.iter().all(|e| extensions.contains(e)) {
+        if REQUIRED_DEVICE_EXTENSIONS
+            .iter()
+            .all(|e| extensions.contains(e))
+        {
             Ok(())
         } else {
             Err(anyhow!("Missing required device extensions."))
@@ -1014,12 +1017,11 @@ unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Resu
     }
 
     // Determine which extensions we need based on device version
-    let mut required_extensions = DEVICE_EXTENSIONS.to_vec();
+    let mut required_extensions = REQUIRED_DEVICE_EXTENSIONS.to_vec();
     let is_vulkan_13_plus = device_version >= vk::make_version(1, 3, 0);
-    let is_vulkan_14_plus = device_version >= vk::make_version(1, 4, 0);
 
-    // Add VK_KHR_synchronization2 extension if not core (core in 1.4+)
-    if !is_vulkan_14_plus {
+    // Add VK_KHR_synchronization2 extension if not core (core in 1.3+, not 1.4+)
+    if !is_vulkan_13_plus {
         required_extensions.push(vk::KHR_SYNCHRONIZATION2_EXTENSION.name);
     }
 
@@ -1043,6 +1045,9 @@ unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Resu
             .dynamic_rendering(true)
             .synchronization2(true);
 
+        let mut memory_priority_features =
+            vk::PhysicalDeviceMemoryPriorityFeaturesEXT::builder().memory_priority(true);
+
         let mut pageable_device_local_memory_features =
             vk::PhysicalDevicePageableDeviceLocalMemoryFeaturesEXT::builder()
                 .pageable_device_local_memory(true);
@@ -1054,6 +1059,7 @@ unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Resu
             .enabled_extension_names(&extensions)
             .enabled_features(&features)
             .push_next(&mut vulkan13_features)
+            .push_next(&mut memory_priority_features)
             .push_next(&mut pageable_device_local_memory_features);
 
         unsafe { instance.create_device(data.physical_device, &device_create_info, None)? }
@@ -1064,6 +1070,9 @@ unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Resu
 
         let mut sync2_features =
             vk::PhysicalDeviceSynchronization2Features::builder().synchronization2(true);
+
+        let mut memory_priority_features =
+            vk::PhysicalDeviceMemoryPriorityFeaturesEXT::builder().memory_priority(true);
 
         let mut pageable_device_local_memory_features =
             vk::PhysicalDevicePageableDeviceLocalMemoryFeaturesEXT::builder()
@@ -1077,6 +1086,7 @@ unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Resu
             .enabled_features(&features)
             .push_next(&mut dynamic_rendering_features)
             .push_next(&mut sync2_features)
+            .push_next(&mut memory_priority_features)
             .push_next(&mut pageable_device_local_memory_features);
 
         unsafe { instance.create_device(data.physical_device, &device_create_info, None)? }

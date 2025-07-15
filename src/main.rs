@@ -32,6 +32,7 @@ fn map_shader_error(error: shaderc::Error) -> anyhow::Error {
 const DEVICE_EXTENSIONS: &[vk::ExtensionName] = &[
     vk::KHR_SWAPCHAIN_EXTENSION.name,
     vk::EXT_MEMORY_PRIORITY_EXTENSION.name,
+    vk::EXT_PAGEABLE_DEVICE_LOCAL_MEMORY_EXTENSION.name,
 ];
 
 // Minimum Vulkan versions for our feature requirements
@@ -1042,13 +1043,18 @@ unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Resu
             .dynamic_rendering(true)
             .synchronization2(true);
 
+        let mut pageable_device_local_memory_features =
+            vk::PhysicalDevicePageableDeviceLocalMemoryFeaturesEXT::builder()
+                .pageable_device_local_memory(true);
+
         log::info!("Using Vulkan 1.3+ with core dynamic rendering and synchronization2");
 
         let device_create_info = vk::DeviceCreateInfo::builder()
             .queue_create_infos(&queue_infos)
             .enabled_extension_names(&extensions)
             .enabled_features(&features)
-            .push_next(&mut vulkan13_features);
+            .push_next(&mut vulkan13_features)
+            .push_next(&mut pageable_device_local_memory_features);
 
         unsafe { instance.create_device(data.physical_device, &device_create_info, None)? }
     } else {
@@ -1059,6 +1065,10 @@ unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Resu
         let mut sync2_features =
             vk::PhysicalDeviceSynchronization2Features::builder().synchronization2(true);
 
+        let mut pageable_device_local_memory_features =
+            vk::PhysicalDevicePageableDeviceLocalMemoryFeaturesEXT::builder()
+                .pageable_device_local_memory(true);
+
         log::info!("Using Vulkan 1.1/1.2 with dynamic rendering and synchronization2 extensions");
 
         let device_create_info = vk::DeviceCreateInfo::builder()
@@ -1066,7 +1076,8 @@ unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Resu
             .enabled_extension_names(&extensions)
             .enabled_features(&features)
             .push_next(&mut dynamic_rendering_features)
-            .push_next(&mut sync2_features);
+            .push_next(&mut sync2_features)
+            .push_next(&mut pageable_device_local_memory_features);
 
         unsafe { instance.create_device(data.physical_device, &device_create_info, None)? }
     };

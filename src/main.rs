@@ -316,7 +316,7 @@ struct AppData {
     // Synchronization - coordinating CPU and GPU work
     image_available_semaphores: Vec<vk::Semaphore>, // Signals when swapchain image is ready
     render_finished_semaphores: Vec<vk::Semaphore>, // Signals when rendering is done
-    in_flight_fences: Vec<vk::Fence>,               // CPU waits for GPU to finish frame
+    in_flight_fences: Vec<vk::Fence>,               // Synchronization for frames in flight
     frame: usize, // Current frame index (0 to MAX_FRAMES_IN_FLIGHT-1)
 
     // Application state
@@ -960,38 +960,45 @@ unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Resu
         log::info!("Using basic Vulkan features (pre-1.4 device)");
     }
 
-    // Enable modern Vulkan features we need
-    let mut sync2_features =
-        vk::PhysicalDeviceSynchronization2Features::builder().synchronization2(true);
+    // Enable only the features we actually use
+    let features = vk::PhysicalDeviceFeatures::builder().sampler_anisotropy(true); // For texture filtering
 
-    let mut dynamic_rendering_features =
-        vk::PhysicalDeviceDynamicRenderingFeatures::builder().dynamic_rendering(true);
+    let device = if supports_vulkan_14 {
+        // Use Vulkan 1.4 - maintenance extensions are now core
+        let mut vulkan13_features = vk::PhysicalDeviceVulkan13Features::builder()
+            .dynamic_rendering(true)
+            .synchronization2(true);
 
-    let mut maintenance4_features =
-        vk::PhysicalDeviceMaintenance4Features::builder().maintenance4(true);
+        log::info!("Using Vulkan 1.4 with core maintenance features");
 
-    let mut maintenance5_features =
-        vk::PhysicalDeviceMaintenance5Features::builder().maintenance5(true);
+        let device_create_info = vk::DeviceCreateInfo::builder()
+            .queue_create_infos(&queue_infos)
+            .enabled_extension_names(&extensions)
+            .enabled_features(&features)
+            .push_next(&mut vulkan13_features);
 
-    let mut buffer_device_address_features =
-        vk::PhysicalDeviceBufferDeviceAddressFeatures::builder().buffer_device_address(true);
+        unsafe { instance.create_device(data.physical_device, &device_create_info, None)? }
+    } else {
+        // Fallback for pre-1.4 devices
+        let mut dynamic_rendering_features =
+            vk::PhysicalDeviceDynamicRenderingFeatures::builder().dynamic_rendering(true);
 
-    let features = vk::PhysicalDeviceFeatures::builder();
+        let mut sync2_features =
+            vk::PhysicalDeviceSynchronization2Features::builder().synchronization2(true);
 
-    let device_create_info = vk::DeviceCreateInfo::builder()
-        .queue_create_infos(&queue_infos)
-        .enabled_extension_names(&extensions)
-        .enabled_features(&features)
-        .push_next(&mut sync2_features)
-        .push_next(&mut dynamic_rendering_features)
-        .push_next(&mut maintenance4_features)
-        .push_next(&mut maintenance5_features)
-        .push_next(&mut buffer_device_address_features);
+        log::info!("Using pre-1.4 Vulkan with explicit feature extensions");
+
+        let device_create_info = vk::DeviceCreateInfo::builder()
+            .queue_create_infos(&queue_infos)
+            .enabled_extension_names(&extensions)
+            .enabled_features(&features)
+            .push_next(&mut dynamic_rendering_features)
+            .push_next(&mut sync2_features);
+
+        unsafe { instance.create_device(data.physical_device, &device_create_info, None)? }
+    };
 
     unsafe {
-        // Create the logical device
-        let device = instance.create_device(data.physical_device, &device_create_info, None)?;
-
         // Get the actual queue handles we'll use for submitting work
         data.graphics_queue = device.get_device_queue(indices.graphics, 0);
         data.present_queue = device.get_device_queue(indices.present, 0);

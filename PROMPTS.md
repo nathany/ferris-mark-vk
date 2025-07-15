@@ -765,6 +765,15 @@ Issue Fixed:** ✅ NVIDIA validation warning about clear color compression
 
 ---
 
+> A new version of Vulkanalia just came out, so I was able to switch the prelude from v1_3 to v1_4 to match with us using Vulkan 1.4. Are there any cleanups we can do based on this new prelude?
+
+> "Many modern applications use a hybrid approach - push descriptors for dynamic per-draw data (like transform matrices, material parameters) and traditional descriptor sets for longer-lived resources (like texture atlases, global uniform buffers)."
+> Is that what you're doing here?
+
+
+
+---
+
 ## Maybe Later
 
 **Memory usage profiling**: Understand actual memory consumption patterns

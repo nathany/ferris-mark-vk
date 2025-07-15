@@ -10,3 +10,5 @@ Please write code that is as concise as reasonably possible.
 Please summarize the issues you ran into along the way.
 
 Validation layers are enabled for debug builds and configured through vkconfig (Vulkan SDK).
+
+IMPORTANT: Before deciding to make any big changes to the code, let's discuss it first.

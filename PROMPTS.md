@@ -868,7 +868,7 @@ Lines that could be eliminated:**
 
 > We now have the vulkanalia-vma crate available for use. Please replace our manual memory allocation with VMA.
 > Documentation is available at: https://docs.rs/vulkanalia-vma/latest/vulkanalia_vma/
-
+> This is a challenging upgrade, so we should make a plan first. And determine if we can break it down into smaller steps.
 
 
 

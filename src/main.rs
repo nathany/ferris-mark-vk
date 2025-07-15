@@ -12,6 +12,7 @@ use vulkanalia::{
     loader::{LIBRARY, LibloadingLoader},
     window as vk_window,
 };
+use vulkanalia_vma::{self as vma, Alloc};
 use winit::dpi::PhysicalSize;
 use winit::event::{Event, KeyEvent, WindowEvent};
 use winit::event_loop::EventLoop;
@@ -304,7 +305,7 @@ struct AppData {
 
     // Sprite data buffer - uploaded to GPU each frame
     sprite_command_buffer: vk::Buffer, // GPU buffer containing sprite data
-    sprite_command_buffer_memory: vk::DeviceMemory, // Memory backing the buffer
+    sprite_command_buffer_allocation: vma::Allocation, // VMA allocation for sprite buffer
     sprite_command_buffer_mapped: *mut SpriteCommand, // CPU pointer to GPU memory
 
     // Descriptors - how shaders access resources
@@ -314,7 +315,7 @@ struct AppData {
 
     // Texture resources - the Ferris sprite image
     texture_image: vk::Image, // GPU image containing sprite texture
-    texture_image_memory: vk::DeviceMemory, // Memory backing the texture
+    texture_image_allocation: vma::Allocation, // VMA allocation for texture image
     texture_image_view: vk::ImageView, // View for accessing the texture
     texture_sampler: vk::Sampler, // How to sample/filter the texture
 
@@ -348,9 +349,10 @@ struct AppData {
 struct App {
     #[allow(dead_code)]
     entry: Entry, // Vulkan library entry point
-    instance: Instance, // Vulkan instance - connection to Vulkan
-    device: Device,     // Logical device - interface to the GPU
-    data: AppData,      // All other Vulkan objects and app state
+    instance: Instance,                // Vulkan instance - connection to Vulkan
+    device: Device,                    // Logical device - interface to the GPU
+    allocator: Option<vma::Allocator>, // VMA allocator for GPU memory management
+    data: AppData,                     // All other Vulkan objects and app state
 }
 
 impl App {
@@ -362,6 +364,7 @@ impl App {
         frame_limit: Option<u32>,
     ) -> Result<Self> {
         let mut data = AppData {
+            // Initialize allocator as null - will be created after device
             surface: vk::SurfaceKHR::null(),
             physical_device: vk::PhysicalDevice::null(),
             graphics_queue: vk::Queue::null(),
@@ -374,12 +377,12 @@ impl App {
             pipeline_layout: vk::PipelineLayout::null(),
             pipeline: vk::Pipeline::null(),
             sprite_command_buffer: vk::Buffer::null(),
-            sprite_command_buffer_memory: vk::DeviceMemory::null(),
+            sprite_command_buffer_allocation: unsafe { std::mem::zeroed() },
             sprite_command_buffer_mapped: std::ptr::null_mut(),
             descriptor_set: vk::DescriptorSet::null(),
             descriptor_pool: vk::DescriptorPool::null(),
             texture_image: vk::Image::null(),
-            texture_image_memory: vk::DeviceMemory::null(),
+            texture_image_allocation: unsafe { std::mem::zeroed() },
             texture_image_view: vk::ImageView::null(),
             texture_sampler: vk::Sampler::null(),
             descriptor_set_layout: vk::DescriptorSetLayout::null(),
@@ -418,6 +421,11 @@ impl App {
             log_gpu_info(&instance, &mut data);
             let device = create_logical_device(&instance, &mut data)?;
 
+            // Create VMA allocator
+            let allocator_options =
+                vma::AllocatorOptions::new(&instance, &device, data.physical_device);
+            let allocator = Some(vma::Allocator::new(&allocator_options)?);
+
             // Create swapchain for rendering to window
             create_swapchain(window, &instance, &device, &mut data, vsync_enabled)?;
             create_swapchain_image_views(&instance, &device, &mut data)?;
@@ -426,12 +434,18 @@ impl App {
             create_command_pool(&instance, &device, &mut data)?;
 
             // Load and setup sprite texture
-            create_texture_image(&instance, &device, &mut data)?;
+            create_texture_image(&instance, &device, &mut data, allocator.as_ref().unwrap())?;
             create_texture_image_view(&instance, &device, &mut data)?;
             create_texture_sampler(&instance, &device, &mut data)?;
 
             // Setup sprite rendering pipeline
-            create_sprite_command_buffer(&instance, &device, &mut data, sprite_count)?;
+            create_sprite_command_buffer(
+                &instance,
+                &device,
+                &mut data,
+                allocator.as_ref().unwrap(),
+                sprite_count,
+            )?;
             create_pipeline(&instance, &device, &mut data)?;
             create_descriptor_sets(&instance, &device, &mut data)?;
 
@@ -443,6 +457,7 @@ impl App {
                 entry,
                 instance,
                 device,
+                allocator,
                 data,
             })
         }
@@ -777,30 +792,30 @@ impl App {
             self.device.destroy_sampler(self.data.texture_sampler, None);
             self.device
                 .destroy_image_view(self.data.texture_image_view, None);
-            self.device.destroy_image(self.data.texture_image, None);
-            self.device
-                .free_memory(self.data.texture_image_memory, None);
 
-            // Destroy buffer resources
             // Destroy descriptor resources
             self.device
                 .destroy_descriptor_pool(self.data.descriptor_pool, None);
-
-            // Unmap and destroy buffers
-            if !self.data.sprite_command_buffer_mapped.is_null() {
-                self.device
-                    .unmap_memory(self.data.sprite_command_buffer_memory);
-            }
-            self.device
-                .destroy_buffer(self.data.sprite_command_buffer, None);
-            self.device
-                .free_memory(self.data.sprite_command_buffer_memory, None);
 
             self.device.destroy_pipeline(self.data.pipeline, None);
             self.device
                 .destroy_pipeline_layout(self.data.pipeline_layout, None);
             self.device
                 .destroy_descriptor_set_layout(self.data.descriptor_set_layout, None);
+
+            // Destroy all VMA allocations before destroying device
+            if let Some(allocator) = &self.allocator {
+                allocator
+                    .destroy_image(self.data.texture_image, self.data.texture_image_allocation);
+                allocator.destroy_buffer(
+                    self.data.sprite_command_buffer,
+                    self.data.sprite_command_buffer_allocation,
+                );
+            }
+
+            // Explicitly drop VMA allocator before destroying device
+            self.allocator.take();
+
             self.device.destroy_device(None);
             self.instance.destroy_surface_khr(self.data.surface, None);
 
@@ -1553,9 +1568,10 @@ unsafe fn record_command_buffer(
 
 // Loads the Ferris sprite texture from disk and uploads it to GPU memory
 unsafe fn create_texture_image(
-    instance: &Instance,
+    _instance: &Instance,
     device: &Device,
     data: &mut AppData,
+    allocator: &vma::Allocator,
 ) -> Result<()> {
     // Load image from disk and convert to RGBA format
     let img = image::open("ferris.png")?.to_rgba8();
@@ -1586,48 +1602,32 @@ unsafe fn create_texture_image(
         .samples(vk::SampleCountFlags::_1); // No multisampling
 
     unsafe {
-        // Create staging buffer and allocate CPU-visible memory for it
-        let staging_buffer = device.create_buffer(&staging_buffer_info, None)?;
+        // Create staging buffer using VMA for CPU-visible memory
+        let staging_allocation_options = vma::AllocationOptions {
+            usage: vma::MemoryUsage::AutoPreferHost,
+            flags: vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+            ..Default::default()
+        };
 
-        let requirements = device.get_buffer_memory_requirements(staging_buffer);
-        let memory_type = get_memory_type(
-            instance,
-            data,
-            requirements,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT, // CPU-accessible memory
-        )?;
-
-        let staging_alloc_info = vk::MemoryAllocateInfo::builder()
-            .allocation_size(requirements.size)
-            .memory_type_index(memory_type);
-
-        let staging_buffer_memory = device.allocate_memory(&staging_alloc_info, None)?;
-        device.bind_buffer_memory(staging_buffer, staging_buffer_memory, 0)?;
+        let (staging_buffer, staging_allocation) =
+            allocator.create_buffer(staging_buffer_info, &staging_allocation_options)?;
 
         // Copy image pixel data from CPU to staging buffer
-        let memory =
-            device.map_memory(staging_buffer_memory, 0, size, vk::MemoryMapFlags::empty())?;
-        std::ptr::copy_nonoverlapping(img.as_raw().as_ptr(), memory.cast(), size as usize);
-        device.unmap_memory(staging_buffer_memory);
+        let memory_ptr = allocator.map_memory(staging_allocation)?;
+        std::ptr::copy_nonoverlapping(img.as_raw().as_ptr(), memory_ptr.cast(), size as usize);
+        allocator.unmap_memory(staging_allocation);
 
-        // Create the actual GPU texture image
-        data.texture_image = device.create_image(&image_info, None)?;
+        // Create the actual GPU texture image using VMA
+        let image_allocation_options = vma::AllocationOptions {
+            usage: vma::MemoryUsage::AutoPreferDevice, // GPU-only memory (faster)
+            ..Default::default()
+        };
 
-        // Allocate GPU-local memory for the texture
-        let requirements = device.get_image_memory_requirements(data.texture_image);
-        let memory_type = get_memory_type(
-            instance,
-            data,
-            requirements,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL, // GPU-only memory (faster)
-        )?;
+        let (texture_image, texture_allocation) =
+            allocator.create_image(image_info, &image_allocation_options)?;
 
-        let image_alloc_info = vk::MemoryAllocateInfo::builder()
-            .allocation_size(requirements.size)
-            .memory_type_index(memory_type);
-
-        data.texture_image_memory = device.allocate_memory(&image_alloc_info, None)?;
-        device.bind_image_memory(data.texture_image, data.texture_image_memory, 0)?;
+        data.texture_image = texture_image;
+        data.texture_image_allocation = texture_allocation;
 
         // Transition image to receive data, copy from staging buffer, then optimize for shader reads
         transition_image_layout(
@@ -1653,9 +1653,8 @@ unsafe fn create_texture_image(
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL, // Optimal for shader sampling
         )?;
 
-        // Clean up staging resources
-        device.destroy_buffer(staging_buffer, None);
-        device.free_memory(staging_buffer_memory, None);
+        // Clean up staging resources using VMA
+        allocator.destroy_buffer(staging_buffer, staging_allocation);
 
         Ok(())
     }
@@ -1719,97 +1718,41 @@ unsafe fn create_texture_sampler(
 
 // Creates a buffer that holds sprite data for GPU rendering
 unsafe fn create_sprite_command_buffer(
-    instance: &Instance,
-    device: &Device,
+    _instance: &Instance,
+    _device: &Device,
     data: &mut AppData,
+    allocator: &vma::Allocator,
     sprite_count: usize,
 ) -> Result<()> {
     unsafe {
         let size = (sprite_count * size_of::<SpriteCommand>()) as u64;
 
-        // Create buffer in CPU-visible memory for frequent updates
-        let (sprite_command_buffer, sprite_command_buffer_memory) = create_buffer(
-            instance,
-            device,
-            data,
-            size,
-            vk::BufferUsageFlags::STORAGE_BUFFER, // Storage buffer for shader access
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT, // CPU-accessible
-        )?;
+        // Create buffer in CPU-visible memory for frequent updates using VMA
+        let buffer_create_info = vk::BufferCreateInfo::builder()
+            .size(size)
+            .usage(vk::BufferUsageFlags::STORAGE_BUFFER) // Storage buffer for shader access
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+        let allocation_options = vma::AllocationOptions {
+            usage: vma::MemoryUsage::Auto, // CPU-visible memory for frequent updates
+            flags: vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+                | vma::AllocationCreateFlags::MAPPED, // Keep persistently mapped
+            ..Default::default()
+        };
+
+        let (sprite_command_buffer, sprite_command_buffer_allocation) =
+            allocator.create_buffer(buffer_create_info, &allocation_options)?;
 
         data.sprite_command_buffer = sprite_command_buffer;
-        data.sprite_command_buffer_memory = sprite_command_buffer_memory;
+        data.sprite_command_buffer_allocation = sprite_command_buffer_allocation;
 
-        // Map the buffer permanently so we can update sprite data each frame
-        data.sprite_command_buffer_mapped = device
-            .map_memory(
-                sprite_command_buffer_memory,
-                0,
-                size,
-                vk::MemoryMapFlags::empty(),
-            )?
+        // Get the mapped pointer from VMA allocation
+        data.sprite_command_buffer_mapped = allocator
+            .get_allocation_info(sprite_command_buffer_allocation)
+            .pMappedData
             .cast();
 
         Ok(())
-    }
-}
-
-unsafe fn create_buffer(
-    instance: &Instance,
-    device: &Device,
-    data: &AppData,
-    size: u64,
-    usage: vk::BufferUsageFlags,
-    properties: vk::MemoryPropertyFlags,
-) -> Result<(vk::Buffer, vk::DeviceMemory)> {
-    unsafe {
-        let buffer_info = vk::BufferCreateInfo::builder()
-            .size(size)
-            .usage(usage)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
-
-        let buffer = device.create_buffer(&buffer_info, None)?;
-        let requirements = device.get_buffer_memory_requirements(buffer);
-
-        let mut alloc_info = vk::MemoryAllocateInfo::builder()
-            .allocation_size(requirements.size)
-            .memory_type_index(get_memory_type(instance, data, requirements, properties)?);
-
-        // Add device address allocation flag if buffer uses shader device address
-        let mut alloc_flags_info = vk::MemoryAllocateFlagsInfo::builder();
-        if usage.contains(vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS) {
-            alloc_flags_info = alloc_flags_info.flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
-            alloc_info = alloc_info.push_next(&mut alloc_flags_info);
-        }
-
-        let buffer_memory = device.allocate_memory(&alloc_info, None)?;
-        device.bind_buffer_memory(buffer, buffer_memory, 0)?;
-
-        Ok((buffer, buffer_memory))
-    }
-}
-
-// Finds a memory type that meets the requirements and has desired properties
-unsafe fn get_memory_type(
-    instance: &Instance,
-    data: &AppData,
-    requirements: vk::MemoryRequirements,
-    properties: vk::MemoryPropertyFlags,
-) -> Result<u32> {
-    unsafe {
-        // Get information about what types of memory this GPU has
-        let memory = instance.get_physical_device_memory_properties(data.physical_device);
-
-        // Find a memory type that both satisfies the requirements and has the properties we want
-        (0..memory.memory_type_count)
-            .find(|i| {
-                // Check if this memory type is allowed by the requirements
-                let suitable = (requirements.memory_type_bits & (1 << i)) != 0;
-                let memory_type = memory.memory_types[*i as usize];
-                // Check if this memory type has the properties we want (CPU-visible, GPU-local, etc.)
-                suitable && memory_type.property_flags.contains(properties)
-            })
-            .ok_or_else(|| anyhow!("Failed to find suitable memory type."))
     }
 }
 

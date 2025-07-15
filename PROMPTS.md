@@ -770,7 +770,47 @@ Issue Fixed:** ✅ NVIDIA validation warning about clear color compression
 > "Many modern applications use a hybrid approach - push descriptors for dynamic per-draw data (like transform matrices, material parameters) and traditional descriptor sets for longer-lived resources (like texture atlases, global uniform buffers)."
 > Is that what you're doing here?
 
+Streamlined Feature Enabling**:
+- **After**: Simplified to only enable features we actually use (`sampler_anisotropy`, `dynamic_rendering`, `synchronization2`)
 
+> 1. We actually don't need sampler_anisotropy for 2D sprites, since they are rendered parallel to the screen.
+
+> 2. We should decide what our minimum Vulkan version is based not only on VK_KHR_dynamic_rendering and VK_KHR_synchronization2, but everything else we're using.
+
+> 3. If we do want a comprehensive fall back, this is the breakdown for those extensions.
+
+> Vulkan 1.3:
+
+> VK_KHR_dynamic_rendering: Core (just enable the feature)
+> VK_KHR_synchronization2: Extension (add to extensions list + enable feature)
+>
+> Vulkan 1.4:
+>
+> VK_KHR_dynamic_rendering: Core (just enable the feature)
+> VK_KHR_synchronization2: Core (just enable the feature)
+>
+> Version compatibility:
+> VK_KHR_dynamic_rendering:
+>
+> Available as extension from Vulkan 1.1+ (requires VK_KHR_get_physical_device_properties2)
+> Core in 1.3+
+>
+> VK_KHR_synchronization2:
+>
+> Available as extension from Vulkan 1.0+
+> Core in 1.4+
+
+✅ **Successfully Completed Changes**
+
+1. **Proper Vulkan Version Requirements**:
+   - **Minimum**: Vulkan 1.1.0 (for `VK_KHR_dynamic_rendering` extension support)
+   - **Preferred**: Vulkan 1.3.0 (`VK_KHR_dynamic_rendering` becomes core)
+   - **Optimal**: Vulkan 1.4.0 (`VK_KHR_synchronization2` also becomes core)
+
+2. **Smart Extension Management**:
+   - **Vulkan 1.4+**: Uses only core features, no additional extensions needed
+   - **Vulkan 1.3**: Uses core `dynamic_rendering`, adds `VK_KHR_synchronization2` extension
+   - **Vulkan 1.1/1.2**: Adds both `VK_KHR_dynamic_rendering` and `VK_KHR_synchronization2` as extensions
 
 ---
 

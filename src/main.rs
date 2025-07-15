@@ -28,6 +28,11 @@ fn map_shader_error(error: shaderc::Error) -> anyhow::Error {
 
 // Vulkan extensions required for rendering to a window surface
 const DEVICE_EXTENSIONS: &[vk::ExtensionName] = &[vk::KHR_SWAPCHAIN_EXTENSION.name];
+
+// Minimum Vulkan versions for our feature requirements
+const MIN_VULKAN_VERSION: u32 = vk::make_version(1, 1, 0); // For VK_KHR_dynamic_rendering extension support
+const PREFERRED_VULKAN_VERSION: u32 = vk::make_version(1, 3, 0); // VK_KHR_dynamic_rendering is core
+const OPTIMAL_VULKAN_VERSION: u32 = vk::make_version(1, 4, 0); // VK_KHR_synchronization2 is core
 // Number of frames we can work on simultaneously (prevents CPU waiting for GPU)
 const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
@@ -802,13 +807,21 @@ unsafe fn create_instance(window: &Window, entry: &Entry, _data: &mut AppData) -
         vk::version_patch(loader_version)
     );
 
-    // Request Vulkan 1.4 if available, otherwise use what's available
-    let requested_version =
-        if vk::version_major(loader_version) >= 1 && vk::version_minor(loader_version) >= 4 {
-            vk::make_version(1, 4, 0)
-        } else {
-            loader_version
-        };
+    // Request the best available version, but require at least our minimum
+    let requested_version = if loader_version >= OPTIMAL_VULKAN_VERSION {
+        OPTIMAL_VULKAN_VERSION
+    } else if loader_version >= PREFERRED_VULKAN_VERSION {
+        PREFERRED_VULKAN_VERSION
+    } else if loader_version >= MIN_VULKAN_VERSION {
+        MIN_VULKAN_VERSION
+    } else {
+        return Err(anyhow!(
+            "Vulkan loader version {}.{}.{} is too old. Minimum required: 1.1.0",
+            vk::version_major(loader_version),
+            vk::version_minor(loader_version),
+            vk::version_patch(loader_version)
+        ));
+    };
 
     // Application metadata
     let application_info = vk::ApplicationInfo::builder()
@@ -860,9 +873,7 @@ unsafe fn pick_physical_device(instance: &Instance, data: &mut AppData) -> Resul
         } else {
             log::info!("Selected physical device (`{}`).", properties.device_name);
             if vk::version_major(device_version) >= 1 && vk::version_minor(device_version) >= 4 {
-                log::info!(
-                    "Device supports Vulkan 1.4 - maintenance6 and other 1.4 features available"
-                );
+                log::info!("Device supports Vulkan 1.4 - all features available as core");
             } else {
                 log::warn!(
                     "Device does not support Vulkan 1.4 - some features may not be available"
@@ -942,34 +953,59 @@ unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Resu
         .collect::<Vec<_>>();
 
     // Extensions this device needs to support
-    let extensions = DEVICE_EXTENSIONS
-        .iter()
-        .map(|n| n.as_ptr())
-        .collect::<Vec<_>>();
 
     let properties = unsafe { instance.get_physical_device_properties(data.physical_device) };
 
-    // Check Vulkan version for advanced features
+    // Determine device capabilities and required extensions
     let device_version = properties.api_version;
-    let supports_vulkan_14 =
-        vk::version_major(device_version) >= 1 && vk::version_minor(device_version) >= 4;
+    let major = vk::version_major(device_version);
+    let minor = vk::version_minor(device_version);
 
-    if supports_vulkan_14 {
-        log::info!("Vulkan 1.4 device detected - maintenance6 and enhanced features available");
-    } else {
-        log::info!("Using basic Vulkan features (pre-1.4 device)");
+    log::info!(
+        "Device Vulkan version: {}.{}.{}",
+        major,
+        minor,
+        vk::version_patch(device_version)
+    );
+
+    // Check version compatibility
+    if device_version < MIN_VULKAN_VERSION {
+        return Err(anyhow!(
+            "Device does not support minimum required Vulkan version 1.1.0"
+        ));
     }
 
-    // Enable only the features we actually use
-    let features = vk::PhysicalDeviceFeatures::builder().sampler_anisotropy(true); // For texture filtering
+    // Determine which extensions we need based on device version
+    let mut required_extensions = DEVICE_EXTENSIONS.to_vec();
+    let is_vulkan_13_plus = device_version >= vk::make_version(1, 3, 0);
+    let is_vulkan_14_plus = device_version >= vk::make_version(1, 4, 0);
 
-    let device = if supports_vulkan_14 {
-        // Use Vulkan 1.4 - maintenance extensions are now core
+    // Add VK_KHR_synchronization2 extension if not core (core in 1.4+)
+    if !is_vulkan_14_plus {
+        required_extensions.push(vk::KHR_SYNCHRONIZATION2_EXTENSION.name);
+    }
+
+    // Add VK_KHR_dynamic_rendering extension if not core (core in 1.3+)
+    if !is_vulkan_13_plus {
+        required_extensions.push(vk::KHR_DYNAMIC_RENDERING_EXTENSION.name);
+    }
+
+    // Convert extension names to the format expected by Vulkan
+    let extensions: Vec<*const std::os::raw::c_char> = required_extensions
+        .iter()
+        .map(|name| name.as_ptr())
+        .collect();
+
+    // We don't need any special Vulkan 1.0 features for 2D sprite rendering
+    let features = vk::PhysicalDeviceFeatures::builder();
+
+    let device = if is_vulkan_13_plus {
+        // Use Vulkan 1.3+ core features
         let mut vulkan13_features = vk::PhysicalDeviceVulkan13Features::builder()
             .dynamic_rendering(true)
             .synchronization2(true);
 
-        log::info!("Using Vulkan 1.4 with core maintenance features");
+        log::info!("Using Vulkan 1.3+ with core dynamic rendering and synchronization2");
 
         let device_create_info = vk::DeviceCreateInfo::builder()
             .queue_create_infos(&queue_infos)
@@ -979,14 +1015,14 @@ unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> Resu
 
         unsafe { instance.create_device(data.physical_device, &device_create_info, None)? }
     } else {
-        // Fallback for pre-1.4 devices
+        // Fallback for Vulkan 1.1/1.2 devices using extensions
         let mut dynamic_rendering_features =
             vk::PhysicalDeviceDynamicRenderingFeatures::builder().dynamic_rendering(true);
 
         let mut sync2_features =
             vk::PhysicalDeviceSynchronization2Features::builder().synchronization2(true);
 
-        log::info!("Using pre-1.4 Vulkan with explicit feature extensions");
+        log::info!("Using Vulkan 1.1/1.2 with dynamic rendering and synchronization2 extensions");
 
         let device_create_info = vk::DeviceCreateInfo::builder()
             .queue_create_infos(&queue_infos)

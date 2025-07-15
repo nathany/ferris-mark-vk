@@ -13,8 +13,9 @@ use vulkanalia::{
     window as vk_window,
 };
 use winit::dpi::PhysicalSize;
-use winit::event::{Event, WindowEvent};
+use winit::event::{Event, KeyEvent, WindowEvent};
 use winit::event_loop::EventLoop;
+use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowBuilder};
 
 // Error handling wrapper functions
@@ -66,6 +67,9 @@ const MAX_BOUNCE_BOOST: f32 = 9.0; // Maximum random upward boost on bounce
 // Swapchain configuration constants
 const SWAPCHAIN_IMAGE_ARRAY_LAYERS: u32 = 1; // Always 1 unless doing stereoscopic 3D
 const MIN_SWAPCHAIN_IMAGE_COUNT_OFFSET: u32 = 1; // Request this many more than minimum for better performance
+
+// Sprite spawning configuration
+const SPAWN_SPRITES_IMMEDIATELY: bool = true; // If true, sprites spawn at startup. If false, wait for spacebar.
 
 // Represents a single sprite in our physics simulation
 #[derive(Clone, Debug)]
@@ -325,9 +329,10 @@ struct AppData {
     frame: usize, // Current frame index (0 to MAX_FRAMES_IN_FLIGHT-1)
 
     // Application state
-    sprite_count: usize,  // Number of sprites being rendered
-    sprites: Vec<Sprite>, // Physics simulation state
-    last_update: Instant, // Time of last physics update
+    sprite_count: usize,   // Number of sprites being rendered
+    sprites: Vec<Sprite>,  // Physics simulation state
+    sprites_spawned: bool, // Whether sprites have been spawned
+    last_update: Instant,  // Time of last physics update
 
     // Performance metrics
     frame_count: u32,            // Frames rendered this second
@@ -385,7 +390,12 @@ impl App {
             in_flight_fences: Vec::new(),
             frame: 0,
             sprite_count,
-            sprites: generate_sprites(sprite_count),
+            sprites: if SPAWN_SPRITES_IMMEDIATELY {
+                generate_sprites(sprite_count)
+            } else {
+                Vec::new()
+            },
+            sprites_spawned: SPAWN_SPRITES_IMMEDIATELY,
             last_update: Instant::now(),
             frame_count: 0,
             last_metrics_time: Instant::now(),
@@ -447,6 +457,11 @@ impl App {
         let dt = now.duration_since(self.data.last_update).as_secs_f32();
         self.data.last_update = now;
         self.update_sprites(dt);
+
+        // Update sprite command buffer with new positions
+        unsafe {
+            self.update_sprite_command_buffer()?;
+        }
 
         // Calculate view-projection matrix for current window size
         let window_size = window.inner_size();
@@ -648,10 +663,13 @@ impl App {
                 sprite.pos.y = 0.0;
             }
         }
+    }
 
-        // Upload new sprite positions to GPU
-        unsafe {
-            self.update_sprite_command_buffer().unwrap();
+    // Spawns sprites if they haven't been spawned yet
+    fn spawn_sprites(&mut self) {
+        if !self.data.sprites_spawned {
+            self.data.sprites = generate_sprites(self.data.sprite_count);
+            self.data.sprites_spawned = true;
         }
     }
 
@@ -2194,6 +2212,22 @@ fn main() -> Result<()> {
                 app.destroy();
             }
             target.exit();
+        }
+        Event::WindowEvent {
+            event:
+                WindowEvent::KeyboardInput {
+                    event:
+                        KeyEvent {
+                            physical_key: PhysicalKey::Code(KeyCode::Space),
+                            state: winit::event::ElementState::Pressed,
+                            ..
+                        },
+                    ..
+                },
+            ..
+        } => {
+            // Spawn sprites when spacebar is pressed
+            app.spawn_sprites();
         }
         Event::WindowEvent {
             event: WindowEvent::RedrawRequested,

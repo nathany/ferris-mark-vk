@@ -814,10 +814,69 @@ Streamlined Feature Enabling**:
 
 ---
 
+> Please take a look at this extension and proposal.
+>
+> https://registry.khronos.org/vulkan/specs/latest/man/html/VK_KHR_unified_image_layouts.html
+> https://github.com/KhronosGroup/Vulkan-Docs/tree/main/proposals/VK_KHR_unified_image_layouts.adoc
+>
+> Does Vulkanalia expose the new fields for VK_KHR_unified_image_layouts? How much would it improve our code and how would it impact our minimum requirements?
+
+Final Assessment: VK_KHR_unified_image_layouts
+
+### ✅ **Vulkanalia Support Status**
+**CONFIRMED: Available in Vulkanalia 0.29.0!**
+- The types `vk::PhysicalDeviceUnifiedImageLayoutsFeaturesKHR` and related enums compile successfully
+- You were right to suspect it might be there - good catch!
+
+### 🚫 **But Driver Support is the Blocker**
+
+**Current Driver Support (as of late 2024/early 2025):**
+- **NVIDIA**: Beta drivers only
+- **AMD RADV**: Recently merged (very new)
+- **Intel**: No support yet
+- **AMD Windows**: Unknown status
+
+**Current Image Layout Usage:**
+Your code uses several image layout transitions:
+
+1. **Swapchain Images**: `UNDEFINED` → `COLOR_ATTACHMENT_OPTIMAL` → `PRESENT_SRC_KHR`
+2. **Texture Loading**: `UNDEFINED` → `TRANSFER_DST_OPTIMAL` → `SHADER_READ_ONLY_OPTIMAL`
+3. **Descriptor Sets**: References `SHADER_READ_ONLY_OPTIMAL`
+
+** Reduced Code Complexity**:
+   - Could eliminate the entire `transition_image_layout` function for non-initialization cases
+   - Simplified descriptor sets (always use `GENERAL`)
+   - Fewer layout-specific code paths
+
+> "Could eliminate the entire `transition_image_layout` function for non-initialization cases"
+> Since we would still need it for initialization cases, how much of a code reduction would that be?
+
+Lines that could be eliminated:**
+- ❌ **1 function call** (5 lines): `TRANSFER_DST_OPTIMAL` → `SHADER_READ_ONLY_OPTIMAL`
+- ❌ **1 match arm** in `transition_image_layout` (7 lines): The second case
+- ❌ **Some descriptor set references** (1-2 lines): Change to `GENERAL
+
+
+---
+
+> Can we make it so the sprites don't spawn until I press the spacebar? And make that controller by a const boolean that I can toggle if I want them to spawn immediately instead.
+
+1. **Immediate Mode** (`SPAWN_SPRITES_IMMEDIATELY = true`)
+2. **Spacebar Mode** (`SPAWN_SPRITES_IMMEDIATELY = false`)
+
+---
+
+> We now have the vulkanalia-vma crate available for use. Please replace our manual memory allocation with VMA.
+> Documentation is available at: https://docs.rs/vulkanalia-vma/latest/vulkanalia_vma/
+
+
+
+
+---
+
 ## Maybe Later
 
 **Memory usage profiling**: Understand actual memory consumption patterns
-
 
 Validation Performance Warning: [ BestPractices-vkAllocateMemory-small-allocation ] | MessageID = 0xfd92477a
 vkAllocateMemory(): pAllocateInfo->allocationSize is 27720. This is a very small allocation (current threshold is 262144 bytes). You should make large allocations and sub-allocate from one large VkDeviceMemory.
@@ -826,7 +885,7 @@ Question -- our frame times and FPS bounce around quite a bit each second. But I
 
 * VK_EXT_debug_utils in debug releases to give names to objects ?
 * VK_KHR_get_physical_device_properties2 ?
-* VK_KHR_unified_image_layouts ? (not yet available)
+
 * Recycling command buffers
 
 Other key extensions and Vulkan 1.4 features to consider:
@@ -837,6 +896,16 @@ VK_EXT_mesh_shader - Modern geometry pipeline replacement for vertex/geometry sh
 VK_KHR_ray_tracing_pipeline - If you're interested in ray tracing
 VK_EXT_multi_draw - Efficient multi-draw calls (could be good for sprites, but it's not core)
 VK_EXT_extended_dynamic_state series - More runtime flexibility
+
+### VK_KHR_unified_image_layouts
+
+> I think we should give it a try. We can do this work on a branch that we can test out. I am running Windows with a non-beta AMD driver, and I can also test on another Windows computer with an NVIDIA driver.
+
+> "Nearly all GPU vendors are ready to support this extension on current-generation hardware"
+> "In practice these image layouts typically map to just a handful of actual physical layouts or compression formats."
+
+> From what I've heard, some people have already tried simplifying to use VK_IMAGE_LAYOUT_GENERAL even without the extension.
+
 
 ### RenderDoc Integration
 

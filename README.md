@@ -1,9 +1,11 @@
 # Ferris Mark VK
 
-A Windows Vulkan 2D sprite rendering benchmark written in Rust, inspired by Jacob's [gophermark](https://github.com/unitoftime/experiments/tree/master/gophermark) ([YouTube](https://www.youtube.com/watch?v=ZuVyxnpMZO4))
-and [ebitengine-bunny-mark](https://github.com/sedyh/ebitengine-bunny-mark) (Artem Sedykh).
+A Windows Vulkan 2D sprite rendering benchmark written in Rust.
 
-Sprite batching inspired by [How I learned Vulkan and wrote a small game engine with it](https://edw.is/learning-vulkan/#drawing-many-sprites) (Elias Daler).
+![Ferris Mark VK](ferris-mark-vk.png)
+
+Inspired by Jacob's [gophermark](https://github.com/unitoftime/experiments/tree/master/gophermark) ([YouTube](https://www.youtube.com/watch?v=ZuVyxnpMZO4))
+and [ebitengine-bunny-mark](https://github.com/sedyh/ebitengine-bunny-mark) (Artem Sedykh). With sprite batching inspired by [How I learned Vulkan and wrote a small game engine with it](https://edw.is/learning-vulkan/#drawing-many-sprites) (Elias Daler).
 
 ## Vulkan SDK recommended
 

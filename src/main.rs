@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::env;
 use std::mem::size_of;
 use std::time::Instant;
-use vulkanalia::prelude::v1_3::*;
+use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk::{KhrSurfaceExtension, KhrSwapchainExtension};
 use vulkanalia::{
     Device, Entry, Instance,
